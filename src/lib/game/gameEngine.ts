@@ -1,4 +1,4 @@
-import { GameState, Player, Room, PlayerAction, DungeonMasterResponse, GameEvent } from '@/types/game';
+import { GameState, Player, Room, PlayerAction, DungeonMasterResponse, GameEvent, DeadBody, BodyState, BodyCondition, EmotionalEvent, Monster, BaseEmotion, ConversationState } from '@/types/game';
 import { GameAPI } from '@/lib/api/gameApi';
 const uuidv4 = () => {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -117,6 +117,11 @@ export class GameEngine {
         throw new Error('Current room not found');
       }
 
+      // Check if this is a talk action that needs conversation handling
+      if (action.type === 'talk' || (action.type === 'custom' && this.isTalkAction(action.details || ''))) {
+        return await this.handleTalkAction(action);
+      }
+
       // Check if this is a movement action that needs room generation
       let newRoomData = null;
       if (action.type === 'move' || (action.type === 'custom' && this.isMovementAction(action.details || ''))) {
@@ -133,6 +138,15 @@ export class GameEngine {
         }
       }
 
+      // Pre-calculate combat results if this is an attack action
+      let combatSimulation = null;
+      if (this.isAttackAction(action.details || '')) {
+        const targetName = this.extractAttackTarget(action.details || '');
+        if (targetName) {
+          combatSimulation = this.simulateCombatAction(targetName);
+        }
+      }
+
       // Use API to process the action
       const response = await this.api.processPlayerAction({
         currentRoom,
@@ -141,7 +155,8 @@ export class GameEngine {
         playerHealth: this.gameState.player.health,
         playerEquippedWeapon: this.gameState.player.equippedItems.weapon,
         action,
-        newRoomData // Pass the pre-generated room data
+        newRoomData, // Pass the pre-generated room data
+        combatSimulation // Pass pre-calculated combat results
       });
 
       // Debug log the response to check for status effects
@@ -170,6 +185,9 @@ export class GameEngine {
       // Update status effect durations (only once per turn)
       console.log(`Turn ${this.gameState.currentTurn}: Updating status effects`);
       this.updateStatusEffects();
+
+      // Update body decomposition over time
+      this.updateBodyDecomposition();
 
       return {
         message: response.narrative,
@@ -260,6 +278,14 @@ export class GameEngine {
     // Handle crafting
     if (action.itemsToCraft) {
       await this.handleCrafting(action.itemsToCraft.join(' and '));
+    }
+
+    // Handle body searching
+    if (action.bodiesToSearch) {
+      for (const bodyTarget of action.bodiesToSearch) {
+        const searchResult = await this.handleSearchAction(bodyTarget);
+        this.addGameEvent('action', searchResult.message);
+      }
     }
 
     // Apply any custom effects the LLM specifies
@@ -586,27 +612,56 @@ export class GameEngine {
     this.addGameEvent('combat', `Dealt ${damage} damage to ${monster.name}`);
     
     if (monster.health <= 0) {
-      // Monster defeated
+      // Monster defeated - create persistent body instead of removing
       currentRoom.monsters.splice(monsterIndex, 1);
       this.addGameEvent('combat', `${monster.name} has been defeated!`);
       
-      // Drop loot
-      if (monster.loot) {
-        currentRoom.items.push(...monster.loot);
-        this.addGameEvent('discovery', `${monster.name} dropped some items!`);
-      }
+      // Create persistent body
+      this.createPersistentBody(monster, currentRoom, 'killed by player');
       
       // Award experience for killing monsters
       const xpGain = Math.max(5, monster.maxHealth * 2); // 2 XP per max HP, minimum 5
       this.gainExperience(xpGain, 'Defeated ' + monster.name);
-    } else {
-      // Monster counterattacks
-      this.gameState.player.health -= monster.damage;
-      this.addGameEvent('combat', `${monster.name} deals ${monster.damage} damage to you!`);
       
-      if (this.gameState.player.health <= 0) {
-        this.gameState.gameOver = true;
-        this.addGameEvent('system', 'You have been defeated!');
+      // Create emotional event for witnesses
+      this.createEmotionalEvent({
+        id: uuidv4(),
+        timestamp: Date.now(),
+        type: 'monster_death_by_player',
+        description: `${monster.name} was killed by the player`,
+        affectedNPCs: this.getNPCWitnessesInRoom(currentRoom),
+        playerInvolved: true,
+        location: currentRoom.id,
+        significance: 7
+      });
+    } else {
+      // Check for retreat or surrender before counterattack
+      const combatDecision = this.handleCombatDecision(monster, currentRoom);
+      
+      if (combatDecision.type === 'retreat') {
+        this.addGameEvent('combat', combatDecision.message);
+        if (combatDecision.success) {
+          // Remove the monster from the room if retreat succeeds
+          currentRoom.monsters.splice(monsterIndex, 1);
+        }
+      } else if (combatDecision.type === 'surrender') {
+        this.addGameEvent('combat', combatDecision.message);
+        // Monster is still in room but won't attack
+        monster.behavior = 'neutral' as any;
+        if (monster.currentEmotion) {
+          monster.currentEmotion.primary = { emotion: 'fearful' as any, cause: 'Surrendered to player' };
+          monster.currentEmotion.intensity = 8;
+        }
+      } else {
+        // Monster counterattacks
+        const actualDamageTaken = this.calculateDamageTaken(monster.damage);
+        this.gameState.player.health -= actualDamageTaken;
+        this.addGameEvent('combat', `${monster.name} deals ${actualDamageTaken} damage to you!`);
+        
+        if (this.gameState.player.health <= 0) {
+          this.gameState.gameOver = true;
+          this.addGameEvent('system', 'You have been defeated!');
+        }
       }
     }
   }
@@ -618,7 +673,73 @@ export class GameEngine {
       baseDamage += this.gameState.player.equippedItems.weapon.properties?.damage || 0;
     }
     
+    // Apply status effect damage modifiers
+    for (const status of this.gameState.player.statuses) {
+      if (status.effects?.damageModifier) {
+        const modifier = typeof status.effects.damageModifier === 'number' 
+          ? status.effects.damageModifier 
+          : parseFloat(String(status.effects.damageModifier)) || 0;
+        baseDamage = Math.floor(baseDamage * (1 + modifier));
+        console.log(`Status effect ${status.name} modified damage by ${modifier}, new damage: ${baseDamage}`);
+      }
+    }
+    
     return baseDamage;
+  }
+
+  private calculateDamageTaken(incomingDamage: number): number {
+    let finalDamage = incomingDamage;
+    
+    // Apply status effect damage taken modifiers
+    for (const status of this.gameState.player.statuses) {
+      if (status.effects?.damageTakenModifier) {
+        const modifier = typeof status.effects.damageTakenModifier === 'number'
+          ? status.effects.damageTakenModifier
+          : parseFloat(String(status.effects.damageTakenModifier)) || 0;
+        finalDamage = Math.floor(finalDamage * (1 + modifier));
+        console.log(`Status effect ${status.name} modified damage taken by ${modifier}, new damage taken: ${finalDamage}`);
+      }
+    }
+    
+    return finalDamage;
+  }
+
+  simulateCombatAction(targetName: string): {
+    playerDamage: number;
+    monsterWillBeDefeated: boolean;
+    monsterCounterAttack?: {
+      damage: number;
+      actualDamageTaken: number;
+    };
+    targetMonster?: any;
+  } | null {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId)!;
+    const monster = currentRoom.monsters.find(
+      m => m.name.toLowerCase().includes(targetName.toLowerCase())
+    );
+    
+    if (!monster) {
+      return null;
+    }
+    
+    const playerDamage = this.calculatePlayerDamage();
+    const monsterWillBeDefeated = monster.health <= playerDamage;
+    
+    let monsterCounterAttack = undefined;
+    if (!monsterWillBeDefeated) {
+      const actualDamageTaken = this.calculateDamageTaken(monster.damage);
+      monsterCounterAttack = {
+        damage: monster.damage,
+        actualDamageTaken
+      };
+    }
+    
+    return {
+      playerDamage,
+      monsterWillBeDefeated,
+      monsterCounterAttack,
+      targetMonster: monster
+    };
   }
 
   private async handleCrafting(itemNames: string) {
@@ -755,6 +876,27 @@ export class GameEngine {
     return null;
   }
 
+  private isAttackAction(details: string): boolean {
+    const attackKeywords = ['attack', 'hit', 'strike', 'fight', 'punch', 'kick', 'smash', 'throw', 'shoot', 'stab'];
+    const lowerDetails = details.toLowerCase();
+    return attackKeywords.some(keyword => lowerDetails.includes(keyword));
+  }
+
+  private extractAttackTarget(details: string): string | null {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId)!;
+    const lowerDetails = details.toLowerCase();
+    
+    // Look for monster names in the action details
+    for (const monster of currentRoom.monsters) {
+      const monsterWords = monster.name.toLowerCase().split(' ');
+      if (monsterWords.some(word => lowerDetails.includes(word))) {
+        return monster.name;
+      }
+    }
+    
+    return null;
+  }
+
   isGameOver(): boolean {
     return this.gameState.gameOver;
   }
@@ -790,5 +932,1093 @@ export class GameEngine {
     this.addGameEvent('levelup', `+${healthGain} max health! Fully healed!`);
     
     console.log(`Player leveled up from ${oldLevel} to ${this.gameState.player.level}`);
+  }
+
+  // Persistent body system methods
+  private createPersistentBody(monster: any, currentRoom: Room, causeOfDeath: string): void {
+    // Generate appropriate items based on the NPC's description and occupation
+    const generatedItems = this.generateLootForNPC(monster);
+    
+    const deadBody: DeadBody = {
+      id: uuidv4(),
+      originalNPCId: monster.id,
+      name: monster.name,
+      description: `The lifeless body of ${monster.name}. ${this.getDeathDescription(causeOfDeath)}`,
+      bodyState: {
+        condition: BodyCondition.FRESH,
+        timeOfDeath: Date.now(),
+        causeOfDeath: causeOfDeath,
+        decompositionLevel: 0,
+        searchable: true,
+        witnessedByNPCs: this.getNPCWitnessesInRoom(currentRoom)
+      },
+      originalLoot: monster.loot || [],
+      originalPossessions: [...(monster.possessions || []), ...generatedItems],
+      searchedBy: [],
+      roomId: currentRoom.id
+    };
+
+    // Initialize dead bodies array if it doesn't exist
+    if (!currentRoom.deadBodies) {
+      currentRoom.deadBodies = [];
+    }
+    currentRoom.deadBodies.push(deadBody);
+
+    // Also add to game state's global dead body registry
+    if (!this.gameState.deadBodies) {
+      this.gameState.deadBodies = new Map();
+    }
+    this.gameState.deadBodies.set(deadBody.id, deadBody);
+
+    // Add atmospheric description
+    this.addGameEvent('system', `The body of ${monster.name} lies motionless on the ground.`);
+  }
+
+  private getDeathDescription(causeOfDeath: string): string {
+    if (causeOfDeath.includes('player')) {
+      return 'Multiple wounds are visible from the fatal encounter.';
+    } else if (causeOfDeath.includes('fire')) {
+      return 'The body shows signs of severe burns.';
+    } else if (causeOfDeath.includes('poison')) {
+      return 'The skin has a sickly pallor, suggesting poisoning.';
+    } else {
+      return 'The cause of death is unclear from external examination.';
+    }
+  }
+
+  // Generate appropriate loot based on NPC type and description
+  private generateLootForNPC(npc: any): any[] {
+    const items: any[] = [];
+    
+    // Generate personal items based on occupation and personality
+    items.push(...this.generatePersonalItems(npc));
+    
+    // Generate tools and equipment based on occupation
+    items.push(...this.generateToolsAndEquipment(npc));
+    
+    // Generate clothing and accessories
+    items.push(...this.generateClothingAndAccessories(npc));
+    
+    // Generate consumables and trinkets
+    items.push(...this.generateConsumablesAndTrinkets(npc));
+    
+    return items;
+  }
+
+  private generatePersonalItems(npc: any): any[] {
+    const items: any[] = [];
+    
+    // Check for occupation-specific personal items
+    if (npc.occupation) {
+      const occupation = npc.occupation.toLowerCase();
+      
+      if (occupation.includes('merchant') || occupation.includes('trader')) {
+        items.push({
+          id: uuidv4(),
+          name: 'Merchant\'s Ledger',
+          description: `A well-worn ledger belonging to ${npc.name}, filled with trade records and contacts`,
+          type: 'misc',
+          stackable: false,
+          quantity: 1,
+          properties: { value: 25 }
+        });
+        
+        // Add coins based on merchant status
+        const coinAmount = 10 + Math.floor(Math.random() * 40);
+        items.push({
+          id: uuidv4(),
+          name: 'Gold Coins',
+          description: `A leather pouch containing ${coinAmount} gold coins`,
+          type: 'misc',
+          stackable: true,
+          quantity: coinAmount,
+          properties: { value: 1 }
+        });
+      }
+      
+      if (occupation.includes('guard') || occupation.includes('soldier')) {
+        items.push({
+          id: uuidv4(),
+          name: 'Guard\'s Badge',
+          description: `An official badge identifying ${npc.name} as a member of the guard`,
+          type: 'misc',
+          stackable: false,
+          quantity: 1,
+          properties: { value: 10 }
+        });
+      }
+      
+      if (occupation.includes('scholar') || occupation.includes('wizard') || occupation.includes('mage')) {
+        items.push({
+          id: uuidv4(),
+          name: 'Spellbook',
+          description: `A leather-bound spellbook filled with ${npc.name}'s arcane notes and research`,
+          type: 'misc',
+          stackable: false,
+          quantity: 1,
+          properties: { value: 50, magical: true }
+        });
+      }
+    }
+    
+    // Add personal effects based on personality
+    if (npc.personality_traits && npc.personality_traits.length > 0) {
+      const traits = npc.personality_traits.map((t: any) => t.trait.toLowerCase());
+      
+      if (traits.some((t: string) => t.includes('religious') || t.includes('devout'))) {
+        items.push({
+          id: uuidv4(),
+          name: 'Holy Symbol',
+          description: `A worn holy symbol that ${npc.name} carried for protection`,
+          type: 'misc',
+          stackable: false,
+          quantity: 1,
+          properties: { value: 15, blessed: true }
+        });
+      }
+      
+      if (traits.some((t: string) => t.includes('romantic') || t.includes('sentimental'))) {
+        items.push({
+          id: uuidv4(),
+          name: 'Locket',
+          description: `A small silver locket containing a miniature portrait`,
+          type: 'misc',
+          stackable: false,
+          quantity: 1,
+          properties: { value: 20 }
+        });
+      }
+    }
+    
+    return items;
+  }
+
+  private generateToolsAndEquipment(npc: any): any[] {
+    const items: any[] = [];
+    
+    if (!npc.occupation) return items;
+    
+    const occupation = npc.occupation.toLowerCase();
+    
+    // Blacksmith/Smith tools
+    if (occupation.includes('smith') || occupation.includes('blacksmith')) {
+      items.push({
+        id: uuidv4(),
+        name: 'Smith\'s Hammer',
+        description: `A well-used smithing hammer with ${npc.name}'s mark on the handle`,
+        type: 'weapon',
+        stackable: false,
+        quantity: 1,
+        properties: { damage: 12, weight: 3, tool: true }
+      });
+      
+      items.push({
+        id: uuidv4(),
+        name: 'Iron Tongs',
+        description: 'Heavy iron tongs used for handling hot metal',
+        type: 'tool',
+        stackable: false,
+        quantity: 1,
+        properties: { weight: 2 }
+      });
+      
+      // Add some raw materials
+      const ingotCount = 2 + Math.floor(Math.random() * 4);
+      items.push({
+        id: uuidv4(),
+        name: 'Iron Ingots',
+        description: 'Raw iron ingots ready for forging',
+        type: 'material',
+        stackable: true,
+        quantity: ingotCount,
+        properties: { value: 5 }
+      });
+    }
+    
+    // Alchemist/Healer tools
+    if (occupation.includes('alchemist') || occupation.includes('healer') || occupation.includes('witch')) {
+      items.push({
+        id: uuidv4(),
+        name: 'Mortar and Pestle',
+        description: 'A stone mortar and pestle stained with various herbs',
+        type: 'tool',
+        stackable: false,
+        quantity: 1,
+        properties: { value: 15 }
+      });
+      
+      // Add potions
+      const potionTypes = [
+        { name: 'Healing Potion', healing: 25, value: 20 },
+        { name: 'Antidote', curesPoison: true, value: 15 },
+        { name: 'Stamina Elixir', restoresStamina: true, value: 18 }
+      ];
+      
+      const potionType = potionTypes[Math.floor(Math.random() * potionTypes.length)];
+      items.push({
+        id: uuidv4(),
+        name: potionType.name,
+        description: `A small vial containing a ${potionType.name.toLowerCase()}`,
+        type: 'consumable',
+        stackable: true,
+        quantity: 1 + Math.floor(Math.random() * 2),
+        properties: potionType
+      });
+    }
+    
+    // Thief/Rogue tools
+    if (occupation.includes('thief') || occupation.includes('rogue') || occupation.includes('scout')) {
+      items.push({
+        id: uuidv4(),
+        name: 'Lockpicks',
+        description: 'A set of finely crafted lockpicks in a leather case',
+        type: 'tool',
+        stackable: false,
+        quantity: 1,
+        properties: { value: 25, unlocking: true }
+      });
+      
+      items.push({
+        id: uuidv4(),
+        name: 'Smoke Bomb',
+        description: 'A small glass orb that creates a cloud of smoke when broken',
+        type: 'consumable',
+        stackable: true,
+        quantity: 1 + Math.floor(Math.random() * 2),
+        properties: { value: 15, escape: true }
+      });
+    }
+    
+    return items;
+  }
+
+  private generateClothingAndAccessories(npc: any): any[] {
+    const items: any[] = [];
+    
+    // Basic clothing based on occupation/status
+    if (npc.occupation) {
+      const occupation = npc.occupation.toLowerCase();
+      
+      if (occupation.includes('noble') || occupation.includes('merchant')) {
+        items.push({
+          id: uuidv4(),
+          name: 'Fine Cloak',
+          description: `A well-tailored cloak of quality fabric bearing ${npc.name}'s insignia`,
+          type: 'armor',
+          stackable: false,
+          quantity: 1,
+          properties: { defense: 2, value: 30 }
+        });
+      } else if (occupation.includes('guard') || occupation.includes('soldier')) {
+        items.push({
+          id: uuidv4(),
+          name: 'Leather Armor',
+          description: 'Standard issue leather armor, worn but serviceable',
+          type: 'armor',
+          stackable: false,
+          quantity: 1,
+          properties: { defense: 5, value: 20 }
+        });
+      } else if (occupation.includes('smith')) {
+        items.push({
+          id: uuidv4(),
+          name: 'Leather Apron',
+          description: 'A thick leather apron marked with burns and metal shavings',
+          type: 'armor',
+          stackable: false,
+          quantity: 1,
+          properties: { defense: 2, fireResistance: true, value: 10 }
+        });
+      } else {
+        // Generic clothing
+        items.push({
+          id: uuidv4(),
+          name: 'Common Clothes',
+          description: 'Simple but functional clothing',
+          type: 'armor',
+          stackable: false,
+          quantity: 1,
+          properties: { defense: 1, value: 5 }
+        });
+      }
+    }
+    
+    // Add accessories based on wealth/status
+    if (Math.random() < 0.3) {
+      const accessories = [
+        { name: 'Silver Ring', description: 'A simple silver band', value: 15 },
+        { name: 'Leather Belt', description: 'A sturdy leather belt with iron buckle', value: 8 },
+        { name: 'Woolen Scarf', description: 'A warm woolen scarf', value: 5 }
+      ];
+      
+      const accessory = accessories[Math.floor(Math.random() * accessories.length)];
+      items.push({
+        id: uuidv4(),
+        name: accessory.name,
+        description: accessory.description,
+        type: 'misc',
+        stackable: false,
+        quantity: 1,
+        properties: { value: accessory.value }
+      });
+    }
+    
+    return items;
+  }
+
+  private generateConsumablesAndTrinkets(npc: any): any[] {
+    const items: any[] = [];
+    
+    // Food items - most NPCs carry some food
+    if (Math.random() < 0.7) {
+      const foodItems = [
+        { name: 'Bread Loaf', description: 'A day-old loaf of bread', healing: 5 },
+        { name: 'Dried Meat', description: 'Strips of salted, dried meat', healing: 8 },
+        { name: 'Apple', description: 'A slightly bruised apple', healing: 3 },
+        { name: 'Cheese Wedge', description: 'A small wedge of hard cheese', healing: 6 },
+        { name: 'Water Flask', description: 'A leather flask half-full of water', healing: 2 }
+      ];
+      
+      const food = foodItems[Math.floor(Math.random() * foodItems.length)];
+      items.push({
+        id: uuidv4(),
+        name: food.name,
+        description: food.description,
+        type: 'consumable',
+        stackable: true,
+        quantity: 1,
+        properties: { healing: food.healing, value: 2 }
+      });
+    }
+    
+    // Random trinkets
+    if (Math.random() < 0.4) {
+      const trinkets = [
+        { name: 'Dice Set', description: 'A set of bone dice in a small pouch' },
+        { name: 'Pipe', description: 'A well-used wooden pipe' },
+        { name: 'Playing Cards', description: 'A worn deck of playing cards' },
+        { name: 'Small Mirror', description: 'A small polished metal mirror' },
+        { name: 'Rabbit\'s Foot', description: 'A preserved rabbit\'s foot on a chain' },
+        { name: 'Glass Beads', description: 'A handful of colorful glass beads' }
+      ];
+      
+      const trinket = trinkets[Math.floor(Math.random() * trinkets.length)];
+      items.push({
+        id: uuidv4(),
+        name: trinket.name,
+        description: trinket.description,
+        type: 'misc',
+        stackable: false,
+        quantity: 1,
+        properties: { value: 3 + Math.floor(Math.random() * 7) }
+      });
+    }
+    
+    // Small chance for a note or letter
+    if (Math.random() < 0.2) {
+      items.push({
+        id: uuidv4(),
+        name: 'Personal Letter',
+        description: `A folded letter addressed to ${npc.name}, its contents might be revealing`,
+        type: 'misc',
+        stackable: false,
+        quantity: 1,
+        properties: { value: 1, readable: true }
+      });
+    }
+    
+    return items;
+  }
+
+  private getNPCWitnessesInRoom(room: Room): string[] {
+    return room.monsters
+      .filter(monster => this.isHumanoidNPC(monster))
+      .map(monster => monster.id);
+  }
+
+  private isHumanoidNPC(monster: any): boolean {
+    // Check if this is a humanoid NPC based on behavior or occupation
+    return monster.behavior === 'friendly' || 
+           monster.behavior === 'neutral' || 
+           monster.behavior === 'trading' ||
+           monster.occupation !== undefined ||
+           monster.conversationState !== undefined;
+  }
+
+  private createEmotionalEvent(event: EmotionalEvent): void {
+    if (!this.gameState.emotionalEvents) {
+      this.gameState.emotionalEvents = [];
+    }
+    this.gameState.emotionalEvents.push(event);
+
+    // Limit stored events to prevent memory bloat
+    if (this.gameState.emotionalEvents.length > 100) {
+      this.gameState.emotionalEvents = this.gameState.emotionalEvents.slice(-50);
+    }
+
+    // Log the event for debugging
+    console.log(`Emotional event created: ${event.type} - ${event.description}`);
+  }
+
+  // Body searching and looting methods
+  async searchBody(bodyId: string): Promise<{ success: boolean; items: any[]; message: string }> {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+    if (!currentRoom?.deadBodies) {
+      return { success: false, items: [], message: 'No bodies to search here.' };
+    }
+
+    const bodyIndex = currentRoom.deadBodies.findIndex(body => body.id === bodyId || body.name.toLowerCase().includes(bodyId.toLowerCase()));
+    if (bodyIndex === -1) {
+      return { success: false, items: [], message: 'Body not found.' };
+    }
+
+    const body = currentRoom.deadBodies[bodyIndex];
+    
+    // Check if body is searchable
+    if (!body.bodyState.searchable) {
+      return { 
+        success: false, 
+        items: [], 
+        message: `The body of ${body.name} is too decomposed to search effectively.` 
+      };
+    }
+
+    // Check if already searched by this player
+    if (body.searchedBy.includes(this.gameState.player.name)) {
+      return { 
+        success: false, 
+        items: [], 
+        message: `You have already searched ${body.name}'s body.` 
+      };
+    }
+
+    try {
+      // Find the original NPC to get occupation info
+      let originalOccupation = 'unknown';
+      const deadNPC = currentRoom.monsters.find(m => m.id === body.originalNPCId);
+      if (deadNPC && deadNPC.occupation) {
+        originalOccupation = deadNPC.occupation;
+      }
+
+      // Use API to handle body search (will generate items if needed)
+      const searchResult = await this.api.searchBody({
+        body: {
+          ...body,
+          originalOccupation
+        },
+        searcherId: this.gameState.player.name,
+        roomContext: `${currentRoom.name}: ${currentRoom.description}`
+      });
+
+      if (searchResult.success) {
+        // Mark body as searched
+        body.searchedBy.push(this.gameState.player.name);
+        
+        // Add found items to room
+        if (searchResult.itemsFound && searchResult.itemsFound.length > 0) {
+          currentRoom.items.push(...searchResult.itemsFound);
+        }
+
+        // Create emotional event for witnesses if they react
+        if (searchResult.witnessesReact) {
+          const witnesses = this.getNPCWitnessesInRoom(currentRoom);
+          if (witnesses.length > 0) {
+            this.createEmotionalEvent({
+              id: uuidv4(),
+              timestamp: Date.now(),
+              type: 'player_searches_body',
+              description: `Player searched the body of ${body.name}`,
+              affectedNPCs: witnesses,
+              playerInvolved: true,
+              location: currentRoom.id,
+              significance: 5
+            });
+          }
+        }
+
+        // Add narrative to game log
+        this.addGameEvent('action', searchResult.searchDescription);
+        
+        // Add emotional impact if significant
+        if (searchResult.emotionalImpact && searchResult.emotionalImpact.length > 20) {
+          this.addGameEvent('system', searchResult.emotionalImpact);
+        }
+
+        return {
+          success: true,
+          items: searchResult.itemsFound || [],
+          message: searchResult.searchDescription
+        };
+      } else {
+        return {
+          success: false,
+          items: [],
+          message: searchResult.searchDescription || 'Failed to search the body.'
+        };
+      }
+    } catch (error) {
+      console.error('Error searching body:', error);
+      // Fallback to local generation if API fails
+      const foundItems = [...(body.originalLoot || []), ...(body.originalPossessions || [])];
+      body.searchedBy.push(this.gameState.player.name);
+      body.originalLoot = [];
+      body.originalPossessions = [];
+
+      if (foundItems.length > 0) {
+        currentRoom.items.push(...foundItems);
+      }
+
+      const itemNames = foundItems.map(item => item.name).join(', ');
+      const message = foundItems.length > 0 
+        ? `You search ${body.name}'s body and find: ${itemNames}`
+        : `You search ${body.name}'s body but find nothing of value.`;
+
+      this.addGameEvent('action', message);
+      return { success: true, items: foundItems, message };
+    }
+  }
+
+  // Body decomposition over time
+  updateBodyDecomposition(): void {
+    const currentTime = Date.now();
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+    
+    if (!currentRoom?.deadBodies) return;
+
+    for (const body of currentRoom.deadBodies) {
+      const timeSinceDeath = currentTime - body.bodyState.timeOfDeath;
+      const hoursSinceDeath = timeSinceDeath / (1000 * 60 * 60);
+
+      let newCondition = body.bodyState.condition;
+      let newDecompositionLevel = body.bodyState.decompositionLevel;
+
+      // Update decomposition based on time
+      if (hoursSinceDeath > 168) { // 7 days
+        newCondition = BodyCondition.SKELETAL;
+        newDecompositionLevel = Math.min(10, Math.floor(hoursSinceDeath / 168) + 7);
+      } else if (hoursSinceDeath > 24) { // 1 day
+        newCondition = BodyCondition.DECOMPOSING;
+        newDecompositionLevel = Math.min(7, Math.floor(hoursSinceDeath / 24) + 2);
+      } else if (hoursSinceDeath > 2) { // 2 hours
+        newCondition = BodyCondition.RECENTLY_DEAD;
+        newDecompositionLevel = Math.min(2, Math.floor(hoursSinceDeath / 2));
+      }
+
+      // Update body state
+      if (newCondition !== body.bodyState.condition || newDecompositionLevel !== body.bodyState.decompositionLevel) {
+        body.bodyState.condition = newCondition;
+        body.bodyState.decompositionLevel = newDecompositionLevel;
+
+        // Bodies become unsearchable after heavy decomposition
+        if (newDecompositionLevel > 7) {
+          body.bodyState.searchable = false;
+        }
+
+        // Update description based on condition
+        body.description = this.getBodyDescriptionByCondition(body.name, newCondition, body.bodyState.causeOfDeath);
+      }
+    }
+
+    // Remove completely decomposed bodies
+    if (currentRoom.deadBodies) {
+      const bodiesRemoved = currentRoom.deadBodies.filter(body => body.bodyState.decompositionLevel >= 10);
+      currentRoom.deadBodies = currentRoom.deadBodies.filter(body => body.bodyState.decompositionLevel < 10);
+      
+      bodiesRemoved.forEach(body => {
+        this.addGameEvent('system', `The remains of ${body.name} have completely decomposed and are no longer visible.`);
+        this.gameState.deadBodies?.delete(body.id);
+      });
+    }
+  }
+
+  private getBodyDescriptionByCondition(name: string, condition: BodyCondition, causeOfDeath: string): string {
+    const deathDesc = this.getDeathDescription(causeOfDeath);
+    
+    switch (condition) {
+      case BodyCondition.FRESH:
+        return `The recently deceased body of ${name}. ${deathDesc}`;
+      case BodyCondition.RECENTLY_DEAD:
+        return `The body of ${name}, showing early signs of rigor mortis. ${deathDesc}`;
+      case BodyCondition.DECOMPOSING:
+        return `The decomposing remains of ${name}. The body is bloated and has a strong odor. ${deathDesc}`;
+      case BodyCondition.SKELETAL:
+        return `The skeletal remains of ${name}. Only bones and some dried tissue remain.`;
+      case BodyCondition.DUST:
+        return `Barely visible traces of what was once ${name}. Time has claimed all but the faintest remnants.`;
+      default:
+        return `The lifeless body of ${name}. ${deathDesc}`;
+    }
+  }
+
+  // Handle search action
+  async handleSearchAction(target: string): Promise<{ success: boolean; message: string }> {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+    if (!currentRoom) {
+      return { success: false, message: 'Cannot search here.' };
+    }
+
+    // Check if searching a body
+    if (currentRoom.deadBodies && currentRoom.deadBodies.length > 0) {
+      const result = await this.searchBody(target);
+      return { success: result.success, message: result.message };
+    }
+
+    return { success: false, message: 'Nothing to search here.' };
+  }
+
+  // Conversation system methods
+  private isTalkAction(details: string): boolean {
+    const talkKeywords = ['talk', 'speak', 'chat', 'greet', 'hello', 'hi', 'converse', 'say'];
+    const lowerDetails = details.toLowerCase();
+    return talkKeywords.some(keyword => lowerDetails.includes(keyword));
+  }
+
+  async handleTalkAction(action: PlayerAction): Promise<DungeonMasterResponse> {
+    try {
+      const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+      if (!currentRoom) {
+        throw new Error('Current room not found');
+      }
+
+      // Find target NPC
+      const targetName = this.extractTalkTarget(action.details || '');
+      let targetNPC = null;
+
+      if (targetName) {
+        targetNPC = currentRoom.monsters.find(monster => 
+          this.isHumanoidNPC(monster) && 
+          monster.name.toLowerCase().includes(targetName.toLowerCase())
+        );
+      } else if (currentRoom.monsters.length === 1 && this.isHumanoidNPC(currentRoom.monsters[0])) {
+        // If only one NPC in room, talk to them
+        targetNPC = currentRoom.monsters[0];
+      }
+
+      if (!targetNPC) {
+        return {
+          message: 'There is no one here to talk to.',
+          success: false,
+          updatedGameState: this.gameState,
+          generatedContent: {}
+        };
+      }
+
+      // Initialize conversation state if needed
+      if (!targetNPC.conversationState) {
+        await this.startConversation(targetNPC);
+      }
+
+      // Get rapport level with this NPC
+      const rapport = this.getPlayerRapport(targetNPC.id);
+
+      // Process conversation through API
+      const response = await this.api.processConversation({
+        npc: targetNPC,
+        playerAction: action.details || 'greet',
+        playerRapport: rapport,
+        roomContext: `${currentRoom.name}: ${currentRoom.description}`,
+        interactionHistory: this.getInteractionHistory(targetNPC.id)
+      });
+
+      // Update conversation state
+      this.updateConversationState(targetNPC, response);
+
+      // Add conversation to game log
+      this.addGameEvent('action', `You talk to ${targetNPC.name}: "${action.details}"`);
+      this.addGameEvent('action', `${targetNPC.name}: "${response.npc_response}"`);
+
+      // Update rapport if changed
+      if (response.rapport_change) {
+        this.updatePlayerRapport(targetNPC.id, response.rapport_change);
+      }
+
+      // Update emotional state if changed
+      if (response.emotional_change) {
+        targetNPC.currentEmotion = response.emotional_change;
+      }
+
+      // Increment turn
+      this.gameState.currentTurn++;
+
+      return {
+        message: `${targetNPC.name}: "${response.npc_response}"`,
+        success: true,
+        updatedGameState: this.gameState,
+        generatedContent: {}
+      };
+    } catch (error) {
+      console.error('Error processing talk action:', error);
+      return {
+        message: 'The conversation doesn\'t go as expected...',
+        success: false,
+        updatedGameState: this.gameState,
+        generatedContent: {}
+      };
+    }
+  }
+
+  async startConversation(npc: Monster): Promise<void> {
+    try {
+      const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+      if (!currentRoom) return;
+
+      const response = await this.api.startConversation({
+        npcId: npc.id,
+        currentRoom,
+        playerInventory: this.gameState.player.inventory,
+        playerStatuses: this.gameState.player.statuses,
+        playerHealth: this.gameState.player.health,
+        playerLevel: this.gameState.player.level
+      });
+
+      // Initialize conversation state
+      npc.conversationState = {
+        isActive: true,
+        turn: 0,
+        mood: response.mood || 'cautious',
+        topics: response.available_topics || [],
+        questsOffered: [],
+        questsCompleted: []
+      };
+
+      // Initialize emotional state if not present
+      if (!npc.currentEmotion) {
+        npc.currentEmotion = {
+          id: uuidv4(),
+          primary: { emotion: 'curious', cause: 'Player approached' },
+          intensity: 5,
+          stability: 5,
+          triggers: [],
+          duration: -1, // Persistent
+          lastUpdated: Date.now()
+        };
+      }
+
+      // Initialize rapport if not present
+      if (!npc.rapport) {
+        npc.rapport = new Map();
+      }
+      if (!npc.rapport.has(this.gameState.player.name)) {
+        npc.rapport.set(this.gameState.player.name, {
+          entityId: this.gameState.player.name,
+          level: 0,
+          category: 'neutral',
+          lastInteraction: Date.now(),
+          significantEvents: [],
+          trustLevel: 5,
+          fearLevel: 0,
+          respectLevel: 5
+        });
+      }
+    } catch (error) {
+      console.error('Error starting conversation:', error);
+    }
+  }
+
+  updateConversationState(npc: Monster, response: any): void {
+    if (!npc.conversationState) return;
+
+    npc.conversationState.turn++;
+    npc.conversationState.lastPlayerMessage = response.last_player_message;
+    
+    if (response.new_topics) {
+      npc.conversationState.topics.push(...response.new_topics);
+    }
+
+    if (response.memory_formed) {
+      this.addNPCMemory(npc.id, response.memory_formed);
+    }
+  }
+
+  endConversation(npc: Monster): void {
+    if (npc.conversationState) {
+      npc.conversationState.isActive = false;
+      this.addGameEvent('action', `You end your conversation with ${npc.name}.`);
+    }
+  }
+
+  private extractTalkTarget(details: string): string | null {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId)!;
+    const lowerDetails = details.toLowerCase();
+    
+    // Look for NPC names in the action details
+    for (const monster of currentRoom.monsters) {
+      if (this.isHumanoidNPC(monster)) {
+        const monsterWords = monster.name.toLowerCase().split(' ');
+        if (monsterWords.some(word => lowerDetails.includes(word))) {
+          return monster.name;
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  private getPlayerRapport(npcId: string): number {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+    if (!currentRoom) return 0;
+
+    const npc = currentRoom.monsters.find(m => m.id === npcId);
+    if (!npc?.rapport) return 0;
+
+    const playerRapport = npc.rapport.get(this.gameState.player.name);
+    return playerRapport?.level || 0;
+  }
+
+  private updatePlayerRapport(npcId: string, change: number): void {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId);
+    if (!currentRoom) return;
+
+    const npc = currentRoom.monsters.find(m => m.id === npcId);
+    if (!npc?.rapport) return;
+
+    const playerRapport = npc.rapport.get(this.gameState.player.name);
+    if (playerRapport) {
+      playerRapport.level = Math.max(-100, Math.min(100, playerRapport.level + change));
+      playerRapport.lastInteraction = Date.now();
+
+      // Update category based on new level
+      if (playerRapport.level >= 80) playerRapport.category = 'devoted';
+      else if (playerRapport.level >= 40) playerRapport.category = 'close_friend';
+      else if (playerRapport.level >= 20) playerRapport.category = 'ally';
+      else if (playerRapport.level >= 5) playerRapport.category = 'friendly';
+      else if (playerRapport.level >= -4) playerRapport.category = 'neutral';
+      else if (playerRapport.level >= -19) playerRapport.category = 'unfriendly';
+      else if (playerRapport.level >= -39) playerRapport.category = 'hostile';
+      else if (playerRapport.level >= -79) playerRapport.category = 'enemy';
+      else playerRapport.category = 'mortal_enemy';
+    }
+  }
+
+  private getInteractionHistory(npcId: string): string[] {
+    // Return recent conversation history with this NPC
+    return this.gameState.gameLog
+      .filter(event => event.type === 'action' && event.details?.npcId === npcId)
+      .slice(-5) // Last 5 interactions
+      .map(event => event.message);
+  }
+
+  private addNPCMemory(npcId: string, memory: string): void {
+    // For now, just add to game log - could be expanded to full memory system
+    this.addGameEvent('system', `${memory} (Memory formed for NPC ${npcId})`);
+  }
+
+  // Combat decision methods for retreat/surrender
+  private checkRetreatConditions(monster: Monster, currentRoom: Room): boolean {
+    // Only humanoid NPCs can make intelligent retreat decisions
+    if (!this.isHumanoidNPC(monster)) return false;
+    
+    const healthPercentage = (monster.health / monster.maxHealth) * 100;
+    const isOutnumbered = this.isMonsterOutnumbered(monster, currentRoom);
+    const hasEscapeRoute = currentRoom.doors.length > 1;
+    
+    // Check personality traits for cowardice/bravery
+    const isCowardly = monster.personality_traits?.some(trait => 
+      trait.trait.toLowerCase().includes('coward') || 
+      trait.trait.toLowerCase().includes('cautious')
+    ) || false;
+    
+    const isBrave = monster.personality_traits?.some(trait => 
+      trait.trait.toLowerCase().includes('brave') || 
+      trait.trait.toLowerCase().includes('fearless')
+    ) || false;
+    
+    // Check emotional state
+    const isFearful = monster.currentEmotion?.primary.emotion === 'fearful' ||
+                     monster.currentEmotion?.primary.emotion === 'suspicious';
+    
+    // Retreat conditions
+    if (healthPercentage < 20) return true; // Very low health
+    if (healthPercentage < 40 && (isCowardly || isFearful)) return true;
+    if (healthPercentage < 50 && isOuutnumbered && !isBrave) return true;
+    if (isFearful && monster.currentEmotion?.intensity && monster.currentEmotion.intensity > 7) return true;
+    
+    return false;
+  }
+  
+  private checkSurrenderConditions(monster: Monster, currentRoom: Room): boolean {
+    // Only humanoid NPCs can surrender
+    if (!this.isHumanoidNPC(monster)) return false;
+    
+    const healthPercentage = (monster.health / monster.maxHealth) * 100;
+    const isOutnumbered = this.isMonsterOutnumbered(monster, currentRoom);
+    
+    // Check personality traits
+    const isCowardly = monster.personality_traits?.some(trait => 
+      trait.trait.toLowerCase().includes('coward') || 
+      trait.trait.toLowerCase().includes('pragmatic')
+    ) || false;
+    
+    const isProud = monster.personality_traits?.some(trait => 
+      trait.trait.toLowerCase().includes('proud') || 
+      trait.trait.toLowerCase().includes('honor')
+    ) || false;
+    
+    // Surrender conditions
+    if (healthPercentage < 10 && !isProud) return true; // Near death
+    if (healthPercentage < 25 && isCowardly) return true;
+    if (healthPercentage < 30 && isOuutnumbered && isCowardly) return true;
+    
+    return false;
+  }
+  
+  private isMonsterOutnumbered(monster: Monster, currentRoom: Room): boolean {
+    // Count allies (monsters with same behavior type or faction)
+    const allies = currentRoom.monsters.filter(m => 
+      m.id !== monster.id && 
+      (m.behavior === monster.behavior || this.areAllied(m, monster))
+    ).length;
+    
+    // Player counts as 1, but may count as more if well-equipped
+    const playerThreatLevel = this.gameState.player.equippedItems.weapon ? 2 : 1;
+    
+    return playerThreatLevel > allies + 1;
+  }
+  
+  private areAllied(monster1: Monster, monster2: Monster): boolean {
+    // Check if monsters are allied based on various factors
+    if (monster1.occupation && monster2.occupation) {
+      // Same occupation often means alliance
+      return monster1.occupation === monster2.occupation;
+    }
+    
+    // Check rapport if they know each other
+    if (monster1.rapport?.has(monster2.id)) {
+      const rapport = monster1.rapport.get(monster2.id)!;
+      return rapport.level > 20; // Allied if rapport is positive
+    }
+    
+    return false;
+  }
+  
+  private executeRetreat(monster: Monster, currentRoom: Room): { success: boolean; message: string } {
+    const hasEscapeRoute = currentRoom.doors.length > 1;
+    const retreatChance = hasEscapeRoute ? 0.7 : 0.3; // Higher chance with escape routes
+    
+    // Modify retreat chance based on monster condition
+    const healthPercentage = (monster.health / monster.maxHealth) * 100;
+    const modifiedChance = retreatChance * (healthPercentage / 100);
+    
+    const success = Math.random() < modifiedChance;
+    
+    if (success) {
+      // Update emotional state
+      if (monster.currentEmotion) {
+        monster.currentEmotion.primary = { emotion: 'fearful' as any, cause: 'Fled from combat' };
+        monster.currentEmotion.intensity = 9;
+      }
+      
+      // Create emotional event
+      this.createEmotionalEvent({
+        id: uuidv4(),
+        timestamp: Date.now(),
+        type: 'monster_retreat',
+        description: `${monster.name} fled from combat`,
+        affectedNPCs: this.getNPCWitnessesInRoom(currentRoom),
+        playerInvolved: true,
+        location: currentRoom.id,
+        significance: 5
+      });
+      
+      return {
+        success: true,
+        message: `${monster.name} turns and flees through one of the exits!"`
+      };
+    } else {
+      return {
+        success: false,
+        message: `${monster.name} tries to flee but you block their escape!`
+      };
+    }
+  }
+  
+  private executeSurrender(monster: Monster, currentRoom: Room): { success: boolean; message: string } {
+    // Surrender is usually successful unless the player has shown no mercy before
+    const success = true;
+    
+    // Update emotional state
+    if (monster.currentEmotion) {
+      monster.currentEmotion.primary = { emotion: 'fearful' as any, cause: 'Surrendered in combat' };
+      monster.currentEmotion.secondary = { emotion: 'sad' as any, cause: 'Defeated and humiliated' };
+      monster.currentEmotion.intensity = 8;
+    }
+    
+    // Update rapport - surrendering creates complex feelings
+    if (monster.rapport && !monster.rapport.has(this.gameState.player.name)) {
+      monster.rapport.set(this.gameState.player.name, {
+        entityId: this.gameState.player.name,
+        level: -10, // Slight negative due to defeat
+        category: 'unfriendly' as any,
+        lastInteraction: Date.now(),
+        significantEvents: [{
+          id: uuidv4(),
+          timestamp: Date.now(),
+          eventType: 'surrender',
+          description: 'Surrendered to player in combat',
+          rapportChange: -10,
+          emotionalImpact: 'fearful' as any,
+          significance: 8
+        }],
+        trustLevel: 2,
+        fearLevel: 8,
+        respectLevel: 3
+      });
+    }
+    
+    // Create emotional event
+    this.createEmotionalEvent({
+      id: uuidv4(),
+      timestamp: Date.now(),
+      type: 'monster_surrender',
+      description: `${monster.name} surrendered to the player`,
+      affectedNPCs: this.getNPCWitnessesInRoom(currentRoom),
+      playerInvolved: true,
+      location: currentRoom.id,
+      significance: 6
+    });
+    
+    // Generate surrender dialogue based on personality
+    const surrenderMessages = this.generateSurrenderMessage(monster);
+    
+    return {
+      success: true,
+      message: surrenderMessages
+    };
+  }
+  
+  private generateSurrenderMessage(monster: Monster): string {
+    const name = monster.name;
+    const isCowardly = monster.personality_traits?.some(trait => 
+      trait.trait.toLowerCase().includes('coward')
+    ) || false;
+    
+    const isProud = monster.personality_traits?.some(trait => 
+      trait.trait.toLowerCase().includes('proud')
+    ) || false;
+    
+    if (isCowardly) {
+      return `${name} drops their weapon and falls to their knees. "Please! I yield! I don't want to die! Take whatever you want!"`;
+    } else if (isProud) {
+      return `${name} lowers their weapon with visible reluctance. "I... I surrender. You have bested me in combat."`;
+    } else {
+      return `${name} raises their hands in surrender. "Enough! I surrender! You win!"`;
+    }
+  }
+  
+  private handleCombatDecision(monster: Monster, currentRoom: Room): { type: 'fight' | 'retreat' | 'surrender'; success: boolean; message: string } {
+    // Check surrender first (more desperate)
+    if (this.checkSurrenderConditions(monster, currentRoom)) {
+      const result = this.executeSurrender(monster, currentRoom);
+      return { type: 'surrender', ...result };
+    }
+    
+    // Then check retreat
+    if (this.checkRetreatConditions(monster, currentRoom)) {
+      const result = this.executeRetreat(monster, currentRoom);
+      return { type: 'retreat', ...result };
+    }
+    
+    // Default to fighting
+    return { type: 'fight', success: true, message: '' };
   }
 }

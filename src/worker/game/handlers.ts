@@ -83,7 +83,8 @@ gameRouter.post('/action', async (c) => {
       difficulty,
       connectedDirections,
       additionalDoors,
-      newRoomData
+      newRoomData,
+      combatSimulation
     } = body;
     
     // Handle old format for backwards compatibility
@@ -95,18 +96,22 @@ gameRouter.post('/action', async (c) => {
     const weaponDamage = equippedWeapon?.properties?.damage || 0;
     const totalDamage = baseDamage + weaponDamage;
     
+    // Use pre-calculated combat results if available (includes status effects)
+    const actualPlayerDamage = combatSimulation?.playerDamage || totalDamage;
+    
     const prompt = `You are a WITTY dungeon master managing a text-based dungeon crawler. Be CONCISE - this is an action game, not a novel. Keep responses SHORT and PUNCHY.
     
     Current situation:
     - Room: ${currentRoom.name} - ${currentRoom.description}
     - Items in room: ${currentRoom.items?.map((i: any) => `${i.name} (${i.type})${i.quantity > 1 ? ' x' + i.quantity : ''}`).join(', ') || 'none'}
     - Monsters in room: ${currentRoom.monsters?.map((m: any) => `${m.name} (${m.health}/${m.maxHealth} HP)`).join(', ') || 'none'}
+    - Dead bodies in room: ${currentRoom.deadBodies?.map((b: any) => `${b.name}'s body`).join(', ') || 'none'}
     - Room features: ${currentRoom.specialFeatures?.join(', ') || 'none'}
     - Player health: ${playerHealth} HP
     - Player level: ${playerLevel || 1}
     - Player inventory: ${playerInventory?.map((i: any) => `${i.name}${i.quantity > 1 ? ' x' + i.quantity : ''}`).join(', ') || 'empty'}
     - Active effects: ${playerStatuses?.map((s: any) => `${s.name} (${s.duration} turns)`).join(', ') || 'none'}
-    - Player damage: ${totalDamage} (base: ${baseDamage}${weaponDamage > 0 ? `, weapon: +${weaponDamage}` : ''})
+    - Player damage: ${actualPlayerDamage} (base: ${baseDamage}${weaponDamage > 0 ? `, weapon: +${weaponDamage}` : ''}${combatSimulation && combatSimulation.playerDamage !== totalDamage ? `, modified by status effects` : ''})
     
     The player's action: "${action.details || action.type}"
     ${actionType ? `Action type: ${actionType}` : ''}
@@ -114,6 +119,14 @@ gameRouter.post('/action', async (c) => {
     ${targetItems?.length ? `Target items: ${targetItems.join(', ')}` : ''}
     ${targetMonsters?.length ? `Target monsters: ${targetMonsters.join(', ')}` : ''}
     ${craftingMaterials?.length ? `Crafting with: ${craftingMaterials.map(i => i.name).join(', ')}` : ''}
+    
+    ${combatSimulation ? `
+    COMBAT SIMULATION RESULTS (use these EXACT values):
+    - Your attack will deal ${combatSimulation.playerDamage} damage to ${combatSimulation.targetMonster?.name}
+    - Monster will ${combatSimulation.monsterWillBeDefeated ? 'be DEFEATED' : 'SURVIVE and counter-attack'}
+    ${combatSimulation.monsterCounterAttack ? `- ${combatSimulation.targetMonster?.name} will deal ${combatSimulation.monsterCounterAttack.actualDamageTaken} damage to you in response` : ''}
+    IMPORTANT: Describe the COMPLETE combat sequence - your attack AND the monster's response (if any).
+    ` : ''}
     
     ${newRoomData ? `
     MOVEMENT NOTE: The player is moving to a new room. Just describe the act of moving/transitioning. Do NOT describe the new room's contents.
@@ -134,14 +147,14 @@ gameRouter.post('/action', async (c) => {
     - Fungal areas → "Spore Infection" (hallucinations, damage over time)
     
     PSYCHOLOGICAL STATUS EFFECTS (apply these often for narrative depth!):
-    - Facing powerful enemies → "Intimidated" (reduced damage)
-    - Successful combat → "Confident" (bonus damage)
+    - Facing powerful enemies → "Intimidated" (damageModifier: -0.2 for -20% damage)
+    - Successful combat → "Confident" (damageModifier: 0.2 for +20% damage)
     - Witnessing death/horror → "Traumatized" (reduced accuracy)
     - Finding treasure → "Elated" (faster movement)
     - Being alone too long → "Paranoid" (see threats that aren't there)
     - Eating bad food → "Nauseous" (reduced health regen)
     - Discovering secrets → "Curious" (bonus to finding hidden items)
-    - Taking risky actions → "Reckless" (more damage dealt and taken)
+    - Taking risky actions → "Reckless" (damageModifier: 0.2, damageTakenModifier: 0.2 for +20% damage dealt and taken)
     - Failing repeatedly → "Demoralized" (all actions less effective)
     - Using magic items → "Mystified" (unpredictable effects)
     
@@ -167,12 +180,16 @@ gameRouter.post('/action', async (c) => {
          * DO NOT generate room details in the narrative - just describe the movement action
          * The room will be generated separately to ensure consistency
        - CRAFTING: Combine items creatively to make new items
-       - COMBAT: Player attacks ALWAYS deal ${totalDamage} damage. Use targetsToAttack field only!
+       - SEARCHING BODIES: When player searches a body, use bodiesToSearch field
+         * "search body", "loot corpse", "check griznak's body" → bodiesToSearch: ["griznak"]
+         * Bodies contain items appropriate to who they were in life
+         * The game will generate realistic loot based on NPC occupation and status
+       - COMBAT: ${combatSimulation ? `Use the EXACT combat simulation values provided above` : `Player attacks ALWAYS deal ${actualPlayerDamage} damage`}. Use targetsToAttack field only!
          * Do NOT set stateChanges.health for combat - the game handles damage automatically
          * Do NOT use stateChanges.health for healing items - the game handles consumables automatically
          * Only use stateChanges.health for environmental damage or poison/disease effects
-         * If damage >= monster's health: Monster is defeated/killed
-         * If damage < monster's health: Monster takes damage but survives
+         ${combatSimulation ? `* DESCRIBE THE COMPLETE SEQUENCE: Your attack dealing ${combatSimulation.playerDamage} damage, then ${combatSimulation.monsterCounterAttack ? `the monster's counter-attack dealing ${combatSimulation.monsterCounterAttack.actualDamageTaken} damage` : 'the monster being defeated'}` : `* If damage >= monster's health: Monster is defeated/killed
+         * If damage < monster's health: Monster takes damage but survives`}
          * Improvised weapons (items used as weapons) still deal damage but may break
        - INTERACTION: Allow creative interactions with items/environment
     8. IMPORTANT: For movement to new rooms:
@@ -182,13 +199,20 @@ gameRouter.post('/action', async (c) => {
        - Focus on the transition, not the destination
        - Example: "You push open the heavy wooden door and step through." (STOP THERE)
     
-    CRITICAL: MULTIPLE ACTIONS AND COMBAT RULES:
+    CRITICAL: MULTIPLE ACTIONS AND CONVERSATION RULES:
     - If the player says things like "take all and then go east" or "grab torch then attack goblin", parse this into MULTIPLE separate actions in the intendedActions array
     - Each action should be processed in sequence
     - "take all", "grab all", "pick up everything" should ONLY take items, NEVER attack monsters
     - Monsters might notice you taking items, but taking items alone does NOT deal damage to them
     - Only explicit combat actions like "attack", "hit", "strike" should cause damage
     - Item collection is NOT hostile unless explicitly combined with combat
+    
+    CONVERSATION ACTIONS:
+    - When player uses words like "talk", "speak", "say", "greet", "hello", detect this as conversation
+    - For conversation actions, respond with narrative but DO NOT process the conversation mechanics here
+    - The game engine will handle conversation through the /conversation endpoint
+    - Example: "talk to merchant" = narrative: "You approach the merchant to start a conversation." (conversation handled separately)
+    - Example: "say hello to guard" = narrative: "You greet the guard politely." (conversation handled separately)
     
     CRITICAL FOR itemsToTake:
     - For "take all", "grab all", "pick up everything", etc. -> itemsToTake: ["all"]
@@ -289,9 +313,19 @@ gameRouter.post('/action', async (c) => {
                 type: "array",
                 items: { type: "string" }
               },
+              targetsToTalkTo: {
+                type: "array",
+                items: { type: "string" },
+                description: "NPCs to initiate conversation with"
+              },
               itemsToCraft: {
                 type: "array",
                 items: { type: "string" }
+              },
+              bodiesToSearch: {
+                type: "array",
+                items: { type: "string" },
+                description: "Bodies to search for loot"
               },
               stateChanges: {
                 type: "object",
@@ -316,7 +350,8 @@ gameRouter.post('/action', async (c) => {
                             damagePerTurn: { type: "integer" },
                             healingPerTurn: { type: "integer" },
                             speedModifier: { type: "number" },
-                            damageModifier: { type: "number" },
+                            damageModifier: { type: "number", description: "Multiplier for outgoing damage (e.g., 0.2 = +20% damage)" },
+                            damageTakenModifier: { type: "number", description: "Multiplier for incoming damage (e.g., 0.2 = +20% damage taken)" },
                             visionReduction: { type: "boolean" }
                           }
                         }
@@ -422,7 +457,7 @@ gameRouter.post('/generate/room', async (c) => {
     1. A unique initial impression (sights/smells/sounds/sensations when entering)
     2. Detailed atmospheric description of the room and contents
     3. 0-4 items (PRIORITIZE potions, food, consumables! Also weapons, tools, containers)
-    4. 0-4 creatures (mix of hostile monsters AND friendly NPCs like shopkeepers, merchants, witches, travelers)
+    4. 0-4 creatures (mix of hostile monsters AND friendly NPCs like shopkeepers, merchants, witches, travelers, guards, hermits)
     5. Special features, puzzles, mysterious signs, or interactive elements
     6. EXACTLY ${allRequiredDoors.length} exits in the directions: ${allRequiredDoors.join(', ')}
     
@@ -482,7 +517,28 @@ gameRouter.post('/generate/room', async (c) => {
               health: { type: "integer" },
               maxHealth: { type: "integer" },
               damage: { type: "integer" },
-              behavior: { type: "string" }
+              behavior: { type: "string" },
+              occupation: { type: "string" },
+              goals: { 
+                type: "array",
+                items: { type: "string" }
+              },
+              secrets: {
+                type: "array", 
+                items: { type: "string" }
+              },
+              possessions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    name: { type: "string" },
+                    description: { type: "string" },
+                    type: { type: "string" }
+                  }
+                }
+              }
             }
           }
         },
@@ -702,6 +758,270 @@ gameRouter.post('/generate/monster', async (c) => {
   }
 });
 
+// Process conversation with NPC
+gameRouter.post('/conversation', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { npc, playerAction, playerRapport, roomContext, interactionHistory } = body;
+    
+    const prompt = `You are managing an emotionally intelligent NPC in a text-based RPG with deep conversation capabilities.
+    
+    NPC: ${npc.name}
+    Description: ${npc.description}
+    Current emotion: ${npc.currentEmotion?.primary?.emotion || 'curious'} (intensity: ${npc.currentEmotion?.intensity || 5})
+    Emotional cause: ${npc.currentEmotion?.primary?.cause || 'Meeting the player'}
+    Player rapport: ${playerRapport}/100
+    
+    Room context: ${roomContext}
+    Player says/does: "${playerAction}"
+    Previous interactions: ${interactionHistory.join(', ') || 'None'}
+    
+    NPC Personality traits: ${npc.personality_traits?.map((t: any) => `${t.trait} (${t.intensity}/10)`).join(', ') || 'Adaptable and curious'}
+    Communication style: Formality ${npc.communicationStyle?.formality || 5}/10, Verbosity ${npc.communicationStyle?.verbosity || 5}/10, Emotional ${npc.communicationStyle?.emotiveness || 5}/10
+    Occupation: ${npc.occupation || 'Wanderer'}
+    Goals: ${npc.goals?.join(', ') || 'Survive in the dungeon'}
+    
+    The NPC should respond in character, considering:
+    1. Their current emotional state and what caused it
+    2. Their personality traits and communication style
+    3. Their relationship with the player (rapport level)
+    4. The context of the room and situation
+    5. Their goals, fears, and motivations
+    6. Their memories of past interactions
+    
+    IMPORTANT CONVERSATION RULES:
+    - NPCs should ACTUALLY SPEAK with dialogue, not just have actions described
+    - Use quotation marks for actual speech: "Hello there, traveler!"
+    - Include emotional reactions, body language, and mannerisms
+    - Make conversations feel natural and character-driven
+    - NPCs can offer information, quests, trade, or just chat
+    - Consider their occupation and role in the world
+    - React appropriately to player's rapport level
+    
+    Examples of good NPC responses:
+    - Friendly merchant: "Ah, a customer! Welcome to my humble stall. I've got the finest wares this side of the mountains!"
+    - Suspicious guard: "State your business here, stranger. These are dangerous times."
+    - Wise hermit: "I sense great potential in you, young one. Sit, and I shall share what wisdom these old bones have gathered."
+    - Injured traveler: "Thank the gods, another person! Please, I need help - bandits took everything I had!"
+    
+    The response should:
+    - Feel authentic to their personality and emotional state
+    - Appropriately reflect their relationship with the player
+    - May change their emotional state based on the interaction
+    - Could affect their rapport with the player
+    - Might lead to new conversation topics or actions
+    - Create a memorable character moment
+    
+    Be creative with emotional responses - NPCs should feel alive and reactive!`;
+
+    const schema = {
+      type: "object",
+      properties: {
+        npc_response: { 
+          type: "string",
+          description: "What the NPC actually says (include quotation marks for dialogue)"
+        },
+        emotional_tone: { 
+          type: "string",
+          description: "Emotional tone of response (happy, suspicious, excited, etc)"
+        },
+        rapport_change: { 
+          type: "integer",
+          description: "How this affects relationship (-10 to +10)"
+        },
+        emotional_change: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            primary: {
+              type: "object",
+              properties: {
+                emotion: { type: "string" },
+                cause: { type: "string" }
+              }
+            },
+            intensity: { type: "integer" },
+            stability: { type: "integer" },
+            triggers: { type: "array", items: { type: "object" } },
+            duration: { type: "integer" },
+            lastUpdated: { type: "integer" }
+          }
+        },
+        new_topics: {
+          type: "array",
+          items: { type: "string" },
+          description: "New conversation topics unlocked"
+        },
+        actions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              action_type: { type: "string" },
+              description: { type: "string" },
+              parameters: { type: "object" }
+            }
+          },
+          description: "Actions the NPC takes (give_item, move, etc)"
+        },
+        memory_formed: { 
+          type: "string",
+          description: "New memory created from this interaction"
+        }
+      },
+      required: ["npc_response", "emotional_tone", "rapport_change"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    console.log('NPC Conversation Response:', JSON.stringify(response, null, 2));
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error processing conversation:', error);
+    return c.json({ 
+      error: 'Failed to process conversation',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Start conversation with NPC
+gameRouter.post('/conversation/start', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { npcId, currentRoom, playerInventory, playerStatuses, playerHealth, playerLevel } = body;
+    
+    // Find the NPC in the room
+    const npc = currentRoom.monsters?.find((m: any) => m.id === npcId);
+    if (!npc) {
+      return c.json({ error: 'NPC not found' }, 404);
+    }
+    
+    const prompt = `You are initializing a conversation with an NPC in a text-based RPG.
+    
+    NPC: ${npc.name}
+    Description: ${npc.description}
+    Occupation: ${npc.occupation || 'Unknown'}
+    Behavior: ${npc.behavior}
+    
+    Room: ${currentRoom.name}
+    Room description: ${currentRoom.description}
+    
+    Player info:
+    - Health: ${playerHealth}
+    - Level: ${playerLevel}
+    - Inventory: ${playerInventory?.map((i: any) => i.name).join(', ') || 'Empty'}
+    - Status effects: ${playerStatuses?.map((s: any) => s.name).join(', ') || 'None'}
+    
+    Initialize this NPC for conversation by determining:
+    1. Their initial mood when the player approaches
+    2. Available conversation topics they might discuss
+    3. Their general attitude and personality
+    
+    Consider the NPC's occupation, the current room context, and the player's appearance.
+    Friendly NPCs might be welcoming, suspicious ones might be cautious, etc.`;
+
+    const schema = {
+      type: "object",
+      properties: {
+        mood: { 
+          type: "string",
+          description: "Initial conversation mood (welcoming, cautious, friendly, suspicious, etc)"
+        },
+        available_topics: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              subject: { type: "string" },
+              npcWillingness: { type: "integer" },
+              requiresRapport: { type: "integer" },
+              onceOnly: { type: "boolean" }
+            }
+          },
+          description: "Topics this NPC can discuss"
+        },
+        greeting: {
+          type: "string",
+          description: "What the NPC might say when first approached"
+        }
+      },
+      required: ["mood", "available_topics"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error starting conversation:', error);
+    return c.json({ 
+      error: 'Failed to start conversation',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Update NPC emotional state
+gameRouter.post('/npc/emotional-state', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { npcId, event, roomContext, witnesses } = body;
+    
+    const prompt = `Update an NPC's emotional state based on an event.
+    
+    NPC ID: ${npcId}
+    Event: ${JSON.stringify(event)}
+    Room context: ${roomContext}
+    Witnesses: ${witnesses.join(', ') || 'None'}
+    
+    Determine how this event should affect the NPC's emotional state:
+    1. What emotion should they feel?
+    2. How intense should it be?
+    3. How long should it last?
+    4. How does it affect their behavior?
+    
+    Consider the nature of the event and realistic emotional responses.`;
+
+    const schema = {
+      type: "object",
+      properties: {
+        new_emotional_state: {
+          type: "object",
+          properties: {
+            primary: {
+              type: "object",
+              properties: {
+                emotion: { type: "string" },
+                cause: { type: "string" }
+              }
+            },
+            intensity: { type: "integer" },
+            stability: { type: "integer" },
+            duration: { type: "integer" }
+          }
+        },
+        behavior_change: { 
+          type: "string",
+          description: "How their behavior might change"
+        }
+      },
+      required: ["new_emotional_state"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error updating emotional state:', error);
+    return c.json({ 
+      error: 'Failed to update emotional state',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
 // Attempt crafting
 gameRouter.post('/craft', async (c) => {
   try {
@@ -764,6 +1084,299 @@ gameRouter.post('/craft', async (c) => {
     console.error('Error attempting craft:', error);
     return c.json({ 
       error: 'Failed to attempt crafting',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Evaluate combat behavior (retreat/surrender decision)
+gameRouter.post('/combat/evaluate-behavior', async (c) => {
+  try {
+    const { npc, healthPercentage, isOutnumbered, escapeRoutes, playerReputation, recentCombatEvents } = await c.req.json();
+    
+    const prompt = `An NPC must decide their combat behavior in a life-threatening situation.
+    
+    NPC: ${npc.name}
+    Current health: ${healthPercentage}%
+    Personality traits: ${JSON.stringify(npc.personality_traits || [])}
+    Current emotion: ${npc.current_emotion?.primary_emotion || 'unknown'} (intensity: ${npc.current_emotion?.intensity || 5})
+    Communication style: ${JSON.stringify(npc.communication_style || {})}
+    Occupation: ${npc.occupation || 'unknown'}
+    Goals: ${JSON.stringify(npc.goals || [])}
+    Fears: ${JSON.stringify(npc.fears || [])}
+    
+    Combat situation:
+    - Is outnumbered: ${isOutnumbered}
+    - Available escape routes: ${escapeRoutes}
+    - Player's reputation: ${playerReputation}/100
+    - Recent events: ${JSON.stringify(recentCombatEvents)}
+    
+    Evaluate what this NPC would realistically do based on:
+    1. Their personality (brave vs cowardly, proud vs pragmatic)
+    2. Their current health and desperation level
+    3. Their occupation and social standing
+    4. Their goals and what they have to live for
+    5. Their assessment of the player (reputation, previous actions)
+    6. Available options (escape routes, allies)
+    
+    Generate authentic dialogue that fits their personality and communication style.
+    Consider that:
+    - Cowardly NPCs retreat or surrender earlier
+    - Proud NPCs may fight to the death rather than surrender
+    - Pragmatic NPCs make calculated decisions
+    - Occupation matters (guards vs merchants vs scholars)
+    - Some may try to negotiate or bargain`;
+    
+    const schema = {
+      type: "object",
+      properties: {
+        decision: { 
+          type: "string",
+          enum: ["FIGHT", "RETREAT", "SURRENDER", "NEGOTIATE"]
+        },
+        reasoning: { type: "string" },
+        desperation_level: { type: "integer", minimum: 1, maximum: 10 },
+        escape_probability: { type: "number", minimum: 0, maximum: 1 },
+        emotional_state: {
+          type: "object",
+          properties: {
+            primary_emotion: { type: "string" },
+            intensity: { type: "integer" },
+            cause: { type: "string" }
+          }
+        },
+        dialogue: { type: "string" }
+      },
+      required: ["decision", "reasoning", "desperation_level", "escape_probability", "emotional_state", "dialogue"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error evaluating combat behavior:', error);
+    return c.json({ 
+      error: 'Failed to evaluate combat behavior',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Process retreat attempt
+gameRouter.post('/combat/retreat', async (c) => {
+  try {
+    const { npc, room, playerPosition, npcAgility, environmentalFactors } = await c.req.json();
+    
+    const prompt = `An NPC is attempting to retreat from combat.
+    
+    NPC: ${npc.name}
+    Current state: ${JSON.stringify(npc.current_state || {})}
+    Room: ${room.name}
+    Available exits: ${JSON.stringify(room.doors.map((d: any) => ({ direction: d.direction, locked: d.locked })))}
+    Player position: ${playerPosition}
+    NPC agility/speed: ${npcAgility}/10
+    Environmental factors: ${JSON.stringify(environmentalFactors)}
+    
+    Determine:
+    1. Which exit they try to use (if any)
+    2. How they attempt to escape (run, dodge, use environment)
+    3. What might block their escape
+    4. Whether the player could pursue
+    5. Where they might flee to
+    
+    Consider:
+    - Room layout and obstacles
+    - NPC's physical condition and injuries
+    - Environmental advantages/disadvantages
+    - Player's position relative to exits
+    - NPC's familiarity with the area
+    
+    Make it dramatic and specific to the situation.`;
+    
+    const schema = {
+      type: "object",
+      properties: {
+        success: { type: "boolean" },
+        escape_route: { type: "string" },
+        obstacles: { 
+          type: "array",
+          items: { type: "string" }
+        },
+        pursuit_possible: { type: "boolean" },
+        final_message: { type: "string" },
+        npc_destination: { type: "string", nullable: true }
+      },
+      required: ["success", "escape_route", "obstacles", "pursuit_possible", "final_message"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error processing retreat:', error);
+    return c.json({ 
+      error: 'Failed to process retreat',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Process surrender
+gameRouter.post('/combat/surrender', async (c) => {
+  try {
+    const { npc, desperationLevel, playerReputation, witnessNpcs, previousMercyShown } = await c.req.json();
+    
+    const prompt = `An NPC is surrendering in combat.
+    
+    NPC: ${npc.name}
+    Personality: ${JSON.stringify(npc.personality_traits || [])}
+    Communication style: ${JSON.stringify(npc.communication_style || {})}
+    Occupation: ${npc.occupation || 'unknown'}
+    Secrets: ${JSON.stringify(npc.secrets || [])}
+    Possessions: ${JSON.stringify(npc.possessions?.map((i: any) => i.name) || [])}
+    Desperation: ${desperationLevel}/10
+    
+    Context:
+    - Player reputation: ${playerReputation}/100
+    - Witnesses present: ${JSON.stringify(witnessNpcs)}
+    - Player has shown mercy before: ${previousMercyShown}
+    
+    Generate:
+    1. Authentic surrender dialogue fitting their personality
+    2. What they offer to save their life (items, information, service)
+    3. Secrets they might desperately reveal
+    4. Their emotional state (fear, shame, relief, anger)
+    5. Whether they'd genuinely cooperate if spared
+    
+    Consider:
+    - Proud NPCs surrender differently than cowardly ones
+    - Occupation affects what they can offer
+    - Desperation level affects what secrets they'll reveal
+    - Some may surrender tactically vs genuinely
+    - Witnesses affect reputation consequences
+    
+    Make the dialogue emotional and character-specific.`;
+    
+    const schema = {
+      type: "object",
+      properties: {
+        npc_dialogue: { type: "string" },
+        emotional_impact: {
+          type: "object",
+          properties: {
+            primary_emotion: { type: "string" },
+            intensity: { type: "integer" },
+            cause: { type: "string" }
+          }
+        },
+        offers: {
+          type: "array",
+          items: { type: "string" }
+        },
+        information_revealed: {
+          type: "array",
+          items: { type: "string" }
+        },
+        future_cooperation: { type: "boolean" },
+        reputation_impact: { type: "integer" }
+      },
+      required: ["npc_dialogue", "emotional_impact", "offers", "information_revealed", "future_cooperation", "reputation_impact"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error processing surrender:', error);
+    return c.json({ 
+      error: 'Failed to process surrender',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Search body
+gameRouter.post('/search/body', async (c) => {
+  try {
+    const { body, searcherId, roomContext } = await c.req.json();
+    
+    const prompt = `A player is searching the body of ${body.name} in ${roomContext}.
+    
+    Body condition: ${body.bodyState?.condition || 'Unknown'}
+    Decomposition level: ${body.bodyState?.decompositionLevel || 0}/10
+    Cause of death: ${body.bodyState?.causeOfDeath || 'Unknown'}
+    
+    NPC Background:
+    - Name: ${body.name}
+    - Original occupation: ${body.originalOccupation || 'Unknown'}
+    - Description: ${body.description}
+    
+    Available loot: ${JSON.stringify(body.originalLoot || [])}
+    Personal possessions: ${JSON.stringify(body.originalPossessions || [])}
+    
+    IMPORTANT: If the body has no items (empty loot and possessions), generate appropriate items based on:
+    1. The NPC's occupation (e.g. blacksmith = hammer, tongs, ingots)
+    2. The NPC's apparent wealth and status
+    3. Personal effects everyone would carry (food, water, small coins)
+    4. The cause of death (some items might be damaged)
+    5. Time since death (decomposition affects item condition)
+    
+    Generate realistic items that tell a story about who this person was.
+    
+    Examples:
+    - Griznak the Smith: Smith's hammer, leather apron, iron ingots, bread, water flask
+    - Merchant: Ledger, coin purse (10-50 gold), fine cloak, dried meat, personal letter
+    - Guard: Guard badge, leather armor, sword, rations, dice
+    - Peasant: Common clothes, wooden spoon, stale bread, 1-5 copper coins
+    
+    The response should:
+    1. List the items found (either existing or generated)
+    2. Describe the search process atmospherically
+    3. Note any emotional impact on the searcher
+    4. Consider if witnesses would react`;
+    
+    const schema = {
+      type: "object",
+      properties: {
+        success: { type: "boolean" },
+        itemsFound: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              name: { type: "string" },
+              description: { type: "string" },
+              type: { type: "string" },
+              stackable: { type: "boolean" },
+              quantity: { type: "integer" },
+              properties: { type: "object" }
+            }
+          }
+        },
+        searchDescription: { type: "string" },
+        emotionalImpact: { type: "string" },
+        witnessesReact: { type: "boolean" }
+      },
+      required: ["success", "itemsFound", "searchDescription", "emotionalImpact", "witnessesReact"]
+    };
+    
+    const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    // Generate IDs for any new items
+    if (response.itemsFound) {
+      response.itemsFound.forEach((item: any) => {
+        if (!item.id) {
+          item.id = crypto.randomUUID();
+        }
+      });
+    }
+    
+    return c.json(response);
+  } catch (error) {
+    console.error('Error searching body:', error);
+    return c.json({ 
+      error: 'Failed to search body',
       details: error instanceof Error ? error.message : 'Unknown error'
     }, 500);
   }
