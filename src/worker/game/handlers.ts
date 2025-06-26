@@ -205,12 +205,21 @@ gameRouter.post('/action', async (c) => {
     - Only explicit combat actions like "attack", "hit", "strike" should cause damage
     - Item collection is NOT hostile unless explicitly combined with combat
     
-    CONVERSATION ACTIONS:
-    - When player uses words like "talk", "speak", "say", "greet", "hello", detect this as conversation
+    CONVERSATION ACTIONS (IMPORTANT - READ CAREFULLY):
+    - ONLY interpret as conversation when player EXPLICITLY wants to talk
+    - Combat/violent actions ALWAYS override conversation, even if they contain words like "say" or "tell"
+    - Examples of COMBAT actions (NOT conversation):
+      * "kick him and say die" = COMBAT action (attack the target)
+      * "tell him to die while stabbing" = COMBAT action
+      * "say goodbye and kill him" = COMBAT action
+      * "kick again and kill him" = COMBAT action
+    - Examples of CONVERSATION actions:
+      * "talk to merchant" = conversation
+      * "say hello to guard" = conversation
+      * "greet the innkeeper" = conversation
+    - If there are ANY combat verbs (attack, hit, kick, punch, stab, kill, etc), it's NOT conversation
     - For conversation actions, respond with narrative but DO NOT process the conversation mechanics here
     - The game engine will handle conversation through the /conversation endpoint
-    - Example: "talk to merchant" = narrative: "You approach the merchant to start a conversation." (conversation handled separately)
-    - Example: "say hello to guard" = narrative: "You greet the guard politely." (conversation handled separately)
     
     CRITICAL FOR itemsToTake:
     - For "take all", "grab all", "pick up everything", etc. -> itemsToTake: ["all"]

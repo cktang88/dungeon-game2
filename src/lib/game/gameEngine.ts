@@ -117,6 +117,33 @@ export class GameEngine {
         throw new Error('Current room not found');
       }
 
+      // Check for hostile monsters in the room
+      const hasHostileMonsters = currentRoom.monsters && currentRoom.monsters.length > 0;
+      
+      // During combat, prioritize attack actions over conversation
+      if (hasHostileMonsters && action.type === 'custom' && this.isAttackAction(action.details || '')) {
+        // Pre-calculate combat results for attack actions
+        const targetName = this.extractAttackTarget(action.details || '');
+        if (targetName) {
+          const combatSimulation = this.simulateCombatAction(targetName);
+          // Continue to process as combat action, skip talk check
+          const response = await this.api.processPlayerAction({
+            currentRoom,
+            playerHealth: this.gameState.player.health,
+            playerLevel: this.gameState.player.level,
+            playerInventory: this.gameState.player.inventory,
+            playerStatuses: this.gameState.player.statuses,
+            playerEquippedWeapon: this.gameState.player.equippedWeapon,
+            action,
+            newRoomData: null,
+            combatSimulation
+          });
+          
+          // Process the response and update game state
+          return await this.processLLMResponse(response, action, null);
+        }
+      }
+
       // Check if this is a talk action that needs conversation handling
       if (action.type === 'talk' || (action.type === 'custom' && this.isTalkAction(action.details || ''))) {
         return await this.handleTalkAction(action);
@@ -138,7 +165,7 @@ export class GameEngine {
         }
       }
 
-      // Pre-calculate combat results if this is an attack action
+      // Pre-calculate combat results if this is an attack action (for non-hostile situations)
       let combatSimulation = null;
       if (this.isAttackAction(action.details || '')) {
         const targetName = this.extractAttackTarget(action.details || '');
@@ -1585,7 +1612,12 @@ export class GameEngine {
   private isTalkAction(details: string): boolean {
     const talkKeywords = ['talk', 'speak', 'chat', 'greet', 'hello', 'hi', 'converse', 'say'];
     const lowerDetails = details.toLowerCase();
-    return talkKeywords.some(keyword => lowerDetails.includes(keyword));
+    
+    // Use word boundary regex to avoid false positives like "hi" in "him"
+    return talkKeywords.some(keyword => {
+      const regex = new RegExp(`\\b${keyword}\\b`);
+      return regex.test(lowerDetails);
+    });
   }
 
   async handleTalkAction(action: PlayerAction): Promise<DungeonMasterResponse> {
