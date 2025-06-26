@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { Heart, Sword, Shield, Package } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Heart, Sword, Shield, Package, Search } from 'lucide-react';
 import { GameEngine } from '@/lib/game/gameEngine';
 import { PlayerAction, GameState, Item } from '@/types/game';
 import { toast } from 'sonner';
@@ -76,17 +77,18 @@ export function GamePage({ playerName }: GamePageProps) {
   const recentEvents = gameState.gameLog.slice(-50);
 
   return (
-    <div className="container mx-auto py-4 max-w-6xl">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <TooltipProvider>
+      <div className="container mx-auto py-2 px-2 max-w-full">
+        <div className="grid grid-cols-1 xl:grid-cols-4 lg:grid-cols-3 gap-4">
         {/* Main Game Area */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="xl:col-span-3 lg:col-span-2 space-y-4">
           {/* Current Room */}
           <Card>
             <CardHeader>
               <CardTitle>{currentRoom?.name || 'Unknown Location'}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-muted-foreground mb-4 text-lg leading-relaxed">
+              <p className="text-muted-foreground mb-4 text-lg leading-relaxed text-left">
                 {currentRoom?.description}
               </p>
               
@@ -95,9 +97,18 @@ export function GamePage({ playerName }: GamePageProps) {
                   <h4 className="font-semibold mb-2 text-lg">Exits:</h4>
                   <div className="flex gap-2 flex-wrap">
                     {currentRoom.doors.map(door => (
-                      <Badge key={door.id} variant="outline">
-                        {door.direction} - {door.description}
-                      </Badge>
+                      <Tooltip key={door.id}>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className="cursor-help flex items-center gap-1">
+                            {door.direction.toUpperCase()}
+                            <Search className="h-3 w-3" />
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{door.description}</p>
+                          {door.locked && <p className="text-destructive mt-1">🔒 Locked</p>}
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
                 </div>
@@ -108,9 +119,18 @@ export function GamePage({ playerName }: GamePageProps) {
                   <h4 className="font-semibold mb-2 text-lg">Items:</h4>
                   <div className="flex gap-2 flex-wrap">
                     {currentRoom.items.map(item => (
-                      <Badge key={item.id} variant="secondary">
-                        {item.name} {item.stackable && item.quantity > 1 && `(${item.quantity})`}
-                      </Badge>
+                      <Tooltip key={item.id}>
+                        <TooltipTrigger asChild>
+                          <Badge variant="secondary" className="cursor-help flex items-center gap-1">
+                            {item.name} {item.stackable && item.quantity > 1 && `(${item.quantity})`}
+                            <Search className="h-3 w-3" />
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{item.description}</p>
+                          {item.type && <p className="text-muted-foreground text-sm mt-1">Type: {item.type}</p>}
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
                 </div>
@@ -133,7 +153,7 @@ export function GamePage({ playerName }: GamePageProps) {
 
           {/* Terminal Interface - Combined Log and Input */}
           <div className="terminal-container">
-            <div className="terminal-log" ref={scrollAreaRef}>
+            <div className="terminal-log text-left" ref={scrollAreaRef}>
               {recentEvents.map(event => (
                 <div key={event.id} className="mb-2">
                   {event.type === 'player' ? (
@@ -224,13 +244,19 @@ export function GamePage({ playerName }: GamePageProps) {
                   <div className="mt-4">
                     <h4 className="font-semibold mb-2">Active Effects:</h4>
                     {gameState.player.statuses.map(status => (
-                      <Badge 
-                        key={status.id} 
-                        variant={status.type === 'buff' ? 'default' : 'destructive'}
-                        className="mr-2 mb-2"
-                      >
-                        {status.name} ({status.duration} turns)
-                      </Badge>
+                      <Tooltip key={status.id}>
+                        <TooltipTrigger asChild>
+                          <Badge 
+                            variant={status.type === 'buff' ? 'default' : 'destructive'}
+                            className="mr-2 mb-2 cursor-help"
+                          >
+                            {status.name} ({status.duration} turns)
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{status.description}</p>
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
                 )}
@@ -249,9 +275,9 @@ export function GamePage({ playerName }: GamePageProps) {
             <CardContent>
               <Tabs defaultValue="all" className="w-full">
                 <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="all">All</TabsTrigger>
-                  <TabsTrigger value="equipment">Equipment</TabsTrigger>
-                  <TabsTrigger value="consumables">Consumables</TabsTrigger>
+                  <TabsTrigger value="all" className="text-sm px-2">All</TabsTrigger>
+                  <TabsTrigger value="equipment" className="text-sm px-2">Gear</TabsTrigger>
+                  <TabsTrigger value="consumables" className="text-sm px-2">Items</TabsTrigger>
                 </TabsList>
                 <TabsContent value="all" className="mt-4">
                   <ScrollArea className="h-[200px]">
@@ -294,6 +320,7 @@ export function GamePage({ playerName }: GamePageProps) {
         </div>
       </div>
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -308,14 +335,22 @@ function InventoryItem({ item }: { item: Item }) {
   };
 
   return (
-    <div className="flex items-center gap-2 p-2 rounded hover:bg-accent">
-      {getIcon()}
-      <div className="flex-1">
-        <div className="text-base font-medium">
-          {item.name} {item.stackable && item.quantity > 1 && `(${item.quantity})`}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="flex items-center gap-2 p-2 rounded hover:bg-accent cursor-help">
+          {getIcon()}
+          <div className="flex-1 flex items-center gap-1">
+            <span className="text-base font-medium">
+              {item.name} {item.stackable && item.quantity > 1 && `(${item.quantity})`}
+            </span>
+            <Search className="h-3 w-3 text-muted-foreground" />
+          </div>
         </div>
-        <div className="text-sm text-muted-foreground">{item.description}</div>
-      </div>
-    </div>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{item.description}</p>
+        {item.type && <p className="text-muted-foreground text-sm mt-1">Type: {item.type}</p>}
+      </TooltipContent>
+    </Tooltip>
   );
 }

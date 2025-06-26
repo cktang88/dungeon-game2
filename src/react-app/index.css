@@ -135,11 +135,12 @@
 }
 
 .terminal-log {
-  min-height: 400px;
-  max-height: 600px;
+  min-height: 500px;
+  max-height: 700px;
   overflow-y: auto;
   font-size: 1.1rem;
   line-height: 1.8;
+  text-align: left;
 }
 
 .terminal-input {

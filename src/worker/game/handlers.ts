@@ -106,6 +106,18 @@ gameRouter.post('/action', async (c) => {
     ${targetMonsters?.length ? `Target monsters: ${targetMonsters.join(', ')}` : ''}
     ${craftingMaterials?.length ? `Crafting with: ${craftingMaterials.map(i => i.name).join(', ')}` : ''}
     
+    Consider ENVIRONMENTAL STATUS EFFECTS:
+    - Walking through water → "Wet" (vulnerable to electricity, slower movement)
+    - Fighting monsters → "Tired" (reduced damage after many actions)
+    - Not drinking for many turns → "Thirsty" (reduced max health)
+    - Poisonous attacks/items → "Poisoned" (damage over time)
+    - Dark rooms → "Blinded" (miss attacks more often)
+    - Cold environments → "Frozen" (slower actions)
+    - Hot environments → "Burning" (damage over time)
+    
+    Add/remove status effects based on the player's actions and environment.
+    Status effects should be creative and enhance gameplay!
+    
     IMPORTANT RULES:
     1. ALWAYS describe the player attempting the action, even if it fails spectacularly
     2. Be HUMOROUS - use puns, wordplay, absurd observations, and unexpected comparisons
@@ -137,6 +149,8 @@ gameRouter.post('/action', async (c) => {
     - "take all and go north" = Two actions: 1) take all items, 2) move north
     - "grab sword then attack goblin" = Two actions: 1) take sword, 2) attack goblin
     - "take all" with monsters present = Only takes items, monsters watch suspiciously but aren't harmed
+    - "i guess i'll take one bread" = itemsToTake: ["bread"] (ignore quantity modifiers like "one", just take the item)
+    - "maybe grab the torch" = itemsToTake: ["torch"] (casual phrasing still means take action)
     
     `;
 
@@ -181,7 +195,17 @@ gameRouter.post('/action', async (c) => {
                         name: { type: "string" },
                         description: { type: "string" },
                         duration: { type: "integer" },
-                        type: { type: "string" }
+                        type: { type: "string" },
+                        effects: {
+                          type: "object",
+                          properties: {
+                            damagePerTurn: { type: "integer" },
+                            healingPerTurn: { type: "integer" },
+                            speedModifier: { type: "number" },
+                            damageModifier: { type: "number" },
+                            visionReduction: { type: "boolean" }
+                          }
+                        }
                       }
                     }
                   },
@@ -295,6 +319,9 @@ gameRouter.post('/action', async (c) => {
     };
     
     const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
+    
+    // Log the LLM response for debugging
+    console.log('LLM Action Response:', JSON.stringify(response, null, 2));
     
     // Generate IDs for any generated rooms
     if (response.intendedActions) {

@@ -195,7 +195,9 @@ export class GameEngine {
 
     // Handle any items to move from room to inventory
     if (action.itemsToTake) {
+      console.log('Items to take:', action.itemsToTake);
       for (const itemName of action.itemsToTake) {
+        console.log(`Attempting to take item: "${itemName}"`);
         this.handleTakeItem(itemName, currentRoom);
       }
     }
@@ -385,6 +387,9 @@ export class GameEngine {
   }
 
   private handleTakeItem(itemName: string, currentRoom: Room) {
+    console.log(`handleTakeItem called with: "${itemName}"`);
+    console.log('Available items in room:', currentRoom.items.map(i => i.name));
+    
     // Handle "all" keyword
     if (itemName.toLowerCase() === 'all' || itemName.toLowerCase() === 'everything') {
       const itemsToTake = [...currentRoom.items];
@@ -413,6 +418,9 @@ export class GameEngine {
       const item = currentRoom.items.splice(itemIndex, 1)[0];
       this.gameState.player.inventory.push(item);
       this.addGameEvent('action', `Picked up ${item.name}`);
+      console.log(`Successfully picked up: ${item.name}`);
+    } else {
+      console.log(`Item not found: "${itemName}"`);
     }
   }
 
@@ -524,9 +532,44 @@ export class GameEngine {
   }
 
   private updateStatusEffects() {
+    // Process status effects before decreasing duration
+    for (const status of this.gameState.player.statuses) {
+      this.processStatusEffect(status);
+    }
+    
+    // Decrease duration of all status effects
     this.gameState.player.statuses = this.gameState.player.statuses
       .map(status => ({ ...status, duration: status.duration - 1 }))
-      .filter(status => status.duration > 0);
+      .filter(status => {
+        if (status.duration <= 0) {
+          this.addGameEvent('system', `${status.name} has worn off.`);
+          return false;
+        }
+        return true;
+      });
+  }
+  
+  private processStatusEffect(status: StatusEffect) {
+    // Process different status effect types
+    const effects = status.effects || {};
+    
+    // Damage over time
+    if (effects.damagePerTurn) {
+      this.gameState.player.health = Math.max(0, 
+        this.gameState.player.health - effects.damagePerTurn
+      );
+      this.addGameEvent('combat', `${status.name} deals ${effects.damagePerTurn} damage!`);
+    }
+    
+    // Healing over time
+    if (effects.healingPerTurn) {
+      this.gameState.player.health = Math.min(this.gameState.player.maxHealth,
+        this.gameState.player.health + effects.healingPerTurn
+      );
+      this.addGameEvent('action', `${status.name} heals ${effects.healingPerTurn} health.`);
+    }
+    
+    // Other effects can be added here (speed modifiers, vision reduction, etc.)
   }
 
   getGameState(): GameState {
