@@ -31,6 +31,7 @@ export interface ProcessActionRequest {
   playerHealth: number;
   playerEquippedWeapon?: any;
   action: any;
+  newRoomData?: any;
 }
 
 export interface GenerateRoomRequest {

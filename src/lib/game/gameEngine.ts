@@ -114,6 +114,19 @@ export class GameEngine {
         throw new Error('Current room not found');
       }
 
+      // Check if this is a movement action that needs room generation
+      let newRoomData = null;
+      if (action.type === 'move' || (action.type === 'custom' && this.isMovementAction(action.details || ''))) {
+        const direction = this.extractDirection(action.details || '');
+        if (direction) {
+          const door = currentRoom.doors.find(d => d.direction.toLowerCase() === direction.toLowerCase());
+          if (door && !door.locked && !door.leadsTo) {
+            // Generate the new room BEFORE processing the action
+            newRoomData = await this.generateNewRoom(direction);
+          }
+        }
+      }
+
       // Use API to process the action
       const response = await this.api.processPlayerAction({
         currentRoom,
@@ -121,7 +134,8 @@ export class GameEngine {
         playerStatuses: this.gameState.player.statuses,
         playerHealth: this.gameState.player.health,
         playerEquippedWeapon: this.gameState.player.equippedItems.weapon,
-        action
+        action,
+        newRoomData // Pass the pre-generated room data
       });
 
       // Debug log the response to check for status effects
@@ -188,7 +202,12 @@ export class GameEngine {
     // Handle item removal (for transformations like breaking items)
     if (action.itemsToRemove) {
       for (const itemName of action.itemsToRemove) {
-        this.removeItemFromInventory(itemName);
+        // Try to remove from inventory first
+        const removed = this.removeItemFromInventory(itemName);
+        if (!removed) {
+          // If not in inventory, try to remove from current room
+          this.removeItemFromRoom(itemName);
+        }
       }
     }
 
@@ -292,7 +311,7 @@ export class GameEngine {
     }
   }
 
-  private removeItemFromInventory(itemName: string) {
+  private removeItemFromInventory(itemName: string): boolean {
     const itemIndex = this.gameState.player.inventory.findIndex(
       item => item.name.toLowerCase() === itemName.toLowerCase() ||
               item.name.toLowerCase().includes(itemName.toLowerCase())
@@ -305,7 +324,29 @@ export class GameEngine {
       } else {
         this.gameState.player.inventory.splice(itemIndex, 1);
       }
+      return true;
     }
+    return false;
+  }
+
+  private removeItemFromRoom(itemName: string): boolean {
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId)!;
+    const itemIndex = currentRoom.items.findIndex(
+      item => item.name.toLowerCase() === itemName.toLowerCase() ||
+              item.name.toLowerCase().includes(itemName.toLowerCase())
+    );
+    
+    if (itemIndex !== -1) {
+      const item = currentRoom.items[itemIndex];
+      if (item.stackable && item.quantity > 1) {
+        item.quantity--;
+      } else {
+        currentRoom.items.splice(itemIndex, 1);
+      }
+      console.log(`Removed ${itemName} from room`);
+      return true;
+    }
+    return false;
   }
 
   private async handleMovement(direction: string) {
@@ -319,8 +360,9 @@ export class GameEngine {
       return;
     }
 
-    // Generate new room if needed
+    // Room should already be generated if needed (done in processAction)
     if (!door.leadsTo) {
+      // Fallback: generate room if somehow not already done
       const newRoom = await this.generateNewRoom(direction);
       door.leadsTo = newRoom.id;
       this.gameState.rooms.set(newRoom.id, newRoom);
@@ -330,6 +372,9 @@ export class GameEngine {
     this.gameState.player.currentRoomId = door.leadsTo;
     const newRoom = this.gameState.rooms.get(door.leadsTo)!;
     newRoom.visited = true;
+    
+    // Add room description to game log
+    this.addGameEvent('discovery', `You enter ${newRoom.name}: ${newRoom.description}`);
   }
 
   private async generateNewRoom(fromDirection: string): Promise<Room> {
@@ -450,26 +495,68 @@ export class GameEngine {
   }
 
   private handleUseItem(itemName: string) {
-    const itemIndex = this.gameState.player.inventory.findIndex(
+    // First check inventory
+    const inventoryIndex = this.gameState.player.inventory.findIndex(
       item => item.name.toLowerCase().includes(itemName.toLowerCase())
     );
     
-    if (itemIndex === -1) return;
-    
-    const item = this.gameState.player.inventory[itemIndex];
-    
-    if (item.type === 'consumable' && item.properties?.healing) {
-      this.gameState.player.health = Math.min(
-        this.gameState.player.health + item.properties.healing,
-        this.gameState.player.maxHealth
-      );
+    if (inventoryIndex !== -1) {
+      // Item is in inventory
+      const item = this.gameState.player.inventory[inventoryIndex];
       
-      item.quantity--;
-      if (item.quantity <= 0) {
-        this.gameState.player.inventory.splice(itemIndex, 1);
+      if (item.type === 'consumable') {
+        // Handle consumable items
+        if (item.properties?.healing) {
+          this.gameState.player.health = Math.min(
+            this.gameState.player.health + item.properties.healing,
+            this.gameState.player.maxHealth
+          );
+          this.addGameEvent('action', `Used ${item.name} and restored ${item.properties.healing} health`);
+        }
+        
+        // Remove consumable after use
+        item.quantity--;
+        if (item.quantity <= 0) {
+          this.gameState.player.inventory.splice(inventoryIndex, 1);
+        }
       }
+      // Non-consumable items from inventory are handled by the LLM narrative
+      return;
+    }
+    
+    // If not in inventory, check current room
+    const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId)!;
+    const roomItemIndex = currentRoom.items.findIndex(
+      item => item.name.toLowerCase().includes(itemName.toLowerCase())
+    );
+    
+    if (roomItemIndex !== -1) {
+      // Item is in room - player is using it directly
+      const item = currentRoom.items[roomItemIndex];
       
-      this.addGameEvent('action', `Used ${item.name} and restored ${item.properties.healing} health`);
+      // For most items used from the room, they should be removed
+      // (The LLM will describe what happens)
+      if (item.type === 'consumable' && item.properties?.healing) {
+        // Consumable healing items get consumed
+        this.gameState.player.health = Math.min(
+          this.gameState.player.health + item.properties.healing,
+          this.gameState.player.maxHealth
+        );
+        this.addGameEvent('action', `Used ${item.name} from the room and restored ${item.properties.healing} health`);
+        currentRoom.items.splice(roomItemIndex, 1);
+      } else if (item.type === 'key' || item.type === 'weapon' || item.type === 'tool') {
+        // Keys, weapons, and tools might be picked up automatically when used
+        this.gameState.player.inventory.push(item);
+        currentRoom.items.splice(roomItemIndex, 1);
+        this.addGameEvent('action', `Picked up and used ${item.name}`);
+      } else {
+        // Other items might be used in place or destroyed
+        // Let the LLM decide via itemsToRemove if it should be removed
+        // For improvised weapons and similar uses, they'll be removed via itemsToRemove
+        console.log(`Item ${item.name} used from room, LLM will decide removal via itemsToRemove`);
+      }
+    } else {
+      console.log(`Item not found: "${itemName}" (checked both inventory and room)`);
     }
   }
 
@@ -618,6 +705,34 @@ export class GameEngine {
 
   getGameState(): GameState {
     return this.gameState;
+  }
+
+  private isMovementAction(details: string): boolean {
+    const movementKeywords = ['go', 'move', 'walk', 'run', 'enter', 'through', 'door', 'exit', 'head'];
+    const lowerDetails = details.toLowerCase();
+    return movementKeywords.some(keyword => lowerDetails.includes(keyword));
+  }
+
+  private extractDirection(details: string): string | null {
+    const directions = ['north', 'south', 'east', 'west', 'up', 'down'];
+    const lowerDetails = details.toLowerCase();
+    
+    // Check for explicit directions
+    for (const dir of directions) {
+      if (lowerDetails.includes(dir)) {
+        return dir;
+      }
+    }
+    
+    // Check for "through the door" type commands
+    if (lowerDetails.includes('door') || lowerDetails.includes('exit')) {
+      const currentRoom = this.gameState.rooms.get(this.gameState.player.currentRoomId)!;
+      if (currentRoom.doors.length === 1) {
+        return currentRoom.doors[0].direction;
+      }
+    }
+    
+    return null;
   }
 
   isGameOver(): boolean {

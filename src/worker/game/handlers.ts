@@ -82,7 +82,8 @@ gameRouter.post('/action', async (c) => {
       theme,
       difficulty,
       connectedDirections,
-      additionalDoors
+      additionalDoors,
+      newRoomData
     } = body;
     
     // Handle old format for backwards compatibility
@@ -114,6 +115,17 @@ gameRouter.post('/action', async (c) => {
     ${targetMonsters?.length ? `Target monsters: ${targetMonsters.join(', ')}` : ''}
     ${craftingMaterials?.length ? `Crafting with: ${craftingMaterials.map(i => i.name).join(', ')}` : ''}
     
+    ${newRoomData ? `
+    NEW ROOM ALREADY GENERATED:
+    - Name: ${newRoomData.name}
+    - Description: ${newRoomData.description}
+    - Items: ${newRoomData.items?.map((i: any) => i.name).join(', ') || 'none'}
+    - Monsters: ${newRoomData.monsters?.map((m: any) => m.name).join(', ') || 'none'}
+    - Special features: ${newRoomData.specialFeatures?.join(', ') || 'none'}
+    
+    IMPORTANT: Use this exact room data in your narrative. Do NOT invent different items or monsters!
+    ` : ''}
+    
     Consider ENVIRONMENTAL STATUS EFFECTS:
     - Walking through water → "Wet" (vulnerable to electricity, slower movement)
     - Fighting monsters → "Tired" (reduced damage after many actions)
@@ -134,21 +146,23 @@ gameRouter.post('/action', async (c) => {
     5. Set success=true for most actions unless they're impossible (like walking through walls)
     6. Even silly actions like "eat torch" should be success=true (player successfully attempts it, even if consequences are bad)
     7. Handle ALL action types intelligently:
-       - MOVEMENT: If moving to a new room that doesn't exist, GENERATE the new room inline
+       - MOVEMENT: Set the moveDirection field for movement actions
          * Some movement actions into new rooms might be indirect, like "enter the door" or "run through the tunnel"
          * If no direction specified, choose the most logical door based on context, or ask the player for clarification.
          * Available doors: ${currentRoom.doors?.map((d: any) => `${d.direction} (${d.description})`).join(', ') || 'none'}
+         * DO NOT generate room details in the narrative - just describe the movement action
+         * The room will be generated separately to ensure consistency
        - CRAFTING: Combine items creatively to make new items
        - COMBAT: Player attacks ALWAYS deal ${totalDamage} damage. Describe the impact accurately!
          * If damage >= monster's health: Monster is defeated/killed
          * If damage < monster's health: Monster takes damage but survives
          * Improvised weapons (items used as weapons) still deal damage but may break
        - INTERACTION: Allow creative interactions with items/environment
-    8. For room generation during movement:
-       - Theme: ${theme || 'dungeon'}
-       - Difficulty: ${difficulty || 5}/10
-       - Entry from: ${targetDirection ? getOppositeDirection(targetDirection) : 'unknown'}
-       - Must have additional exits besides the entry
+    8. IMPORTANT: For movement to new rooms:
+       - If newRoomData is provided above, use EXACTLY that room data in your narrative
+       - Describe entering the room and seeing the EXACT items/monsters listed
+       - Do NOT invent different contents - use what's provided
+       - If no newRoomData is provided, just describe the movement action
     
     CRITICAL: MULTIPLE ACTIONS AND COMBAT RULES:
     - If the player says things like "take all and then go east" or "grab torch then attack goblin", parse this into MULTIPLE separate actions in the intendedActions array
@@ -174,6 +188,8 @@ gameRouter.post('/action', async (c) => {
     - "go through the door" = moveDirection: choose most logical door direction (or ask the player for clarification)
     - "enter the north door" = moveDirection: "north"
     - "use the door" = moveDirection: choose most logical door direction (or ask the player for clarification)
+    - "use the torch on the wall" = itemsToUse: ["torch"], narrative describes moving to torch, monsters react
+    - "throw the bone at goblin" = itemsToUse: ["bone"], itemsToRemove: ["bone"], goblin becomes alert/aggressive
     
     IMPROVISED WEAPON COMBAT:
     - When player uses an item as an improvised weapon (e.g., "smash gnawer with rib bone"):
@@ -183,13 +199,39 @@ gameRouter.post('/action', async (c) => {
       * Create narrative tension between the item's fragility and the damage dealt
       * Example: "The bone shatters on impact, but still deals crushing damage"
     
+    USING ITEMS FROM THE ROOM:
+    - When the player uses an item that's in the room (not in inventory):
+      * They must move to get it - this might alert monsters!
+      * Consider distance: is the item near monsters? Behind them? In plain sight?
+      * Monsters should react based on their current state and behavior:
+        - Alert monsters will notice movement
+        - Distracted/sleeping monsters might not notice careful movement
+        - Aggressive monsters might attack during the attempt
+      * Add the item to itemsToUse array
+      * If item is destroyed/consumed/taken, add to itemsToRemove (works for both room and inventory items)
+      * Examples:
+        - "grab torch from wall" = Player moves across room, monsters notice
+        - "use the lever" = Player must reach it, might trigger reactions
+        - "throw the rock at goblin" = Must get rock first, goblin sees you coming
+    
+    MONSTER AWARENESS AND REACTIONS:
+    - Monsters have states: calm, alert, aggressive, distracted, sleeping, etc.
+    - Movement across the room changes monster states:
+      * Calm → Alert (they notice you)
+      * Alert → Aggressive (they prepare to attack)
+      * Sleeping → Alert (if you're noisy) or stays Sleeping (if careful)
+    - Consider line of sight and positioning
+    - Multiple monsters might react differently based on their positions
+    
     CHAIN OF THOUGHT REASONING:
     First, in the 'reasoning' field, think through:
     1. What exactly is the player trying to do?
-    2. What environmental factors might affect this action?
-    3. How would monsters/items realistically react?
-    4. What unexpected consequences might occur?
-    5. How can this create an emergent, memorable moment?
+    2. Is the item in their inventory or in the room? Do they need to move to get it?
+    3. What environmental factors might affect this action?
+    4. How would monsters react to the player's movement/actions?
+    5. What unexpected consequences might occur?
+    6. Should the item be removed from the room after use? (add to itemsToRemove)
+    7. How can this create an emergent, memorable moment?
     
     Then use your reasoning to craft the narrative and determine outcomes.
     This ensures consistency and reduces the need for multiple clarifications.
@@ -271,64 +313,13 @@ gameRouter.post('/action', async (c) => {
                       }
                     }
                   },
-                  generatedRoom: {
-                    type: "object",
-                    properties: {
-                      id: { type: "string" },
-                      name: { type: "string" },
-                      description: { type: "string" },
-                      items: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            id: { type: "string" },
-                            name: { type: "string" },
-                            description: { type: "string" },
-                            type: { type: "string" },
-                            stackable: { type: "boolean" },
-                            quantity: { type: "integer" }
-                          }
-                        }
-                      },
-                      monsters: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            id: { type: "string" },
-                            name: { type: "string" },
-                            description: { type: "string" },
-                            health: { type: "integer" },
-                            maxHealth: { type: "integer" },
-                            damage: { type: "integer" },
-                            behavior: { type: "string" }
-                          }
-                        }
-                      },
-                      doors: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            id: { type: "string" },
-                            direction: { type: "string" },
-                            description: { type: "string" },
-                            locked: { type: "boolean" }
-                          }
-                        }
-                      },
-                      specialFeatures: {
-                        type: "array",
-                        items: { type: "string" }
-                      }
-                    }
-                  }
+                  // Room generation removed - rooms are now pre-generated
                 }
               },
               itemsToRemove: {
                 type: "array",
-                items: { type: "string" }
+                items: { type: "string" },
+                description: "Items to remove from either room or inventory (e.g., consumed, destroyed, or taken)"
               },
               itemsToAdd: {
                 type: "array",
@@ -371,15 +362,12 @@ gameRouter.post('/action', async (c) => {
     // Log the LLM response for debugging
     console.log('LLM Action Response:', JSON.stringify(response, null, 2));
     
-    // Generate IDs for any generated rooms
-    if (response.intendedActions) {
+    // If we pre-generated room data, inject it into the response
+    if (newRoomData && response.intendedActions) {
       response.intendedActions.forEach((action: any) => {
-        if (action.stateChanges?.generatedRoom) {
-          const room = action.stateChanges.generatedRoom;
-          room.id = crypto.randomUUID();
-          room.items?.forEach((item: any) => { item.id = crypto.randomUUID(); });
-          room.monsters?.forEach((monster: any) => { monster.id = crypto.randomUUID(); });
-          room.doors?.forEach((door: any) => { door.id = crypto.randomUUID(); });
+        if (action.moveDirection && action.stateChanges) {
+          // Add the pre-generated room to state changes
+          action.stateChanges.generatedRoom = newRoomData;
         }
       });
     }
