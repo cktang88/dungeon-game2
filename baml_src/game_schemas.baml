@@ -182,9 +182,7 @@ function ProcessPlayerAction(current_room: Room, player_inventory: Item[], playe
     - Ongoing events in the room
     - Logical consequences of actions
     
-    Respond with humor and creativity. Create emergent, memorable moments.
-    Be realistic about outcomes but embrace unexpected interactions.
-    Rate your own humor from 1-10.
+    Create emergent, memorable moments. Be realistic about outcomes but embrace unexpected interactions.
     
     {{ ctx.output_format }}
   "#

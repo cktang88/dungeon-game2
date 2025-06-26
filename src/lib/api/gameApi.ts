@@ -29,6 +29,7 @@ export interface ProcessActionRequest {
   playerInventory: any[];
   playerStatuses: any[];
   playerHealth: number;
+  playerEquippedWeapon?: any;
   action: any;
 }
 

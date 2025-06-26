@@ -27,7 +27,8 @@ function getOppositeDirection(direction: string): string {
 export const gameRouter = new Hono<{ Bindings: Env }>();
 
 // For now, we'll make direct API calls to Gemini
-// In production, you'd want to properly set up the BAML client for workers
+// Full BAML client migration requires updating schemas and game engine
+// TODO: Migrate to BAML client for better type safety and maintainability
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
@@ -87,6 +88,12 @@ gameRouter.post('/action', async (c) => {
     // Handle old format for backwards compatibility
     const action = body.action || { type: actionType, details: actionDetails };
     
+    // Calculate damage for attacks (to ensure consistency with game engine)
+    const baseDamage = 10;
+    const equippedWeapon = body.playerEquippedWeapon;
+    const weaponDamage = equippedWeapon?.properties?.damage || 0;
+    const totalDamage = baseDamage + weaponDamage;
+    
     const prompt = `You are a WITTY dungeon master managing a text-based dungeon crawler. Channel your inner Terry Pratchett, but try to be concise like Steinbeck. You might also be inspired by Cormac McCarthy and Chuck Palahniuk!
     
     Current situation:
@@ -98,6 +105,7 @@ gameRouter.post('/action', async (c) => {
     - Player level: ${playerLevel || 1}
     - Player inventory: ${playerInventory?.map((i: any) => `${i.name}${i.quantity > 1 ? ' x' + i.quantity : ''}`).join(', ') || 'empty'}
     - Active effects: ${playerStatuses?.map((s: any) => `${s.name} (${s.duration} turns)`).join(', ') || 'none'}
+    - Player damage: ${totalDamage} (base: ${baseDamage}${weaponDamage > 0 ? `, weapon: +${weaponDamage}` : ''})
     
     The player's action: "${action.details || action.type}"
     ${actionType ? `Action type: ${actionType}` : ''}
@@ -127,8 +135,14 @@ gameRouter.post('/action', async (c) => {
     6. Even silly actions like "eat torch" should be success=true (player successfully attempts it, even if consequences are bad)
     7. Handle ALL action types intelligently:
        - MOVEMENT: If moving to a new room that doesn't exist, GENERATE the new room inline
+         * Some movement actions into new rooms might be indirect, like "enter the door" or "run through the tunnel"
+         * If no direction specified, choose the most logical door based on context, or ask the player for clarification.
+         * Available doors: ${currentRoom.doors?.map((d: any) => `${d.direction} (${d.description})`).join(', ') || 'none'}
        - CRAFTING: Combine items creatively to make new items
-       - COMBAT: Handle attacks with damage calculations
+       - COMBAT: Player attacks ALWAYS deal ${totalDamage} damage. Describe the impact accurately!
+         * If damage >= monster's health: Monster is defeated/killed
+         * If damage < monster's health: Monster takes damage but survives
+         * Improvised weapons (items used as weapons) still deal damage but may break
        - INTERACTION: Allow creative interactions with items/environment
     8. For room generation during movement:
        - Theme: ${theme || 'dungeon'}
@@ -144,19 +158,54 @@ gameRouter.post('/action', async (c) => {
     - Only explicit combat actions like "attack", "hit", "strike" should cause damage
     - Item collection is NOT hostile unless explicitly combined with combat
     
+    CRITICAL FOR itemsToTake:
+    - For "take all", "grab all", "pick up everything", etc. -> itemsToTake: ["all"]
+    - For specific items -> itemsToTake: ["torch"], ["sword"], etc. (use exact item names from the room)
+    - NEVER list out all items when player says "take all" - just return ["all"]
+    
     Examples:
     - "eat torch" = Single action: eating the torch
-    - "take all and go north" = Two actions: 1) take all items, 2) move north
-    - "grab sword then attack goblin" = Two actions: 1) take sword, 2) attack goblin
-    - "take all" with monsters present = Only takes items, monsters watch suspiciously but aren't harmed
+    - "take all and go north" = Two actions: 1) take all items (itemsToTake: ["all"]), 2) move north
+    - "grab sword then attack goblin" = Two actions: 1) take sword (itemsToTake: ["sword"]), 2) attack goblin
+    - "take all" = itemsToTake: ["all"] (NOT ["Rusty Torch", "Stale Bread"])
+    - "grab everything" = itemsToTake: ["all"] (NOT a list of items)
     - "i guess i'll take one bread" = itemsToTake: ["bread"] (ignore quantity modifiers like "one", just take the item)
     - "maybe grab the torch" = itemsToTake: ["torch"] (casual phrasing still means take action)
+    - "go through the door" = moveDirection: choose most logical door direction (or ask the player for clarification)
+    - "enter the north door" = moveDirection: "north"
+    - "use the door" = moveDirection: choose most logical door direction (or ask the player for clarification)
+    
+    IMPROVISED WEAPON COMBAT:
+    - When player uses an item as an improvised weapon (e.g., "smash gnawer with rib bone"):
+      * The attack still deals ${totalDamage} damage
+      * Describe the impact based on damage vs monster health
+      * Fragile items (bones, sticks, etc.) should break: add itemsToRemove and describe destruction
+      * Create narrative tension between the item's fragility and the damage dealt
+      * Example: "The bone shatters on impact, but still deals crushing damage"
+    
+    CHAIN OF THOUGHT REASONING:
+    First, in the 'reasoning' field, think through:
+    1. What exactly is the player trying to do?
+    2. What environmental factors might affect this action?
+    3. How would monsters/items realistically react?
+    4. What unexpected consequences might occur?
+    5. How can this create an emergent, memorable moment?
+    
+    Then use your reasoning to craft the narrative and determine outcomes.
+    This ensures consistency and reduces the need for multiple clarifications.
+
+    Vary the length of the narrative based on the complexity of the action(s).
+    For example, a simple movement action might result in just a sentence or two, while than a complex action with multiple targets might warrant a paragraph or more response.
     
     `;
 
     const schema = {
       type: "object",
       properties: {
+        reasoning: { 
+          type: "string",
+          description: "Step-by-step reasoning about the action, environment, and consequences"
+        },
         narrative: { type: "string" },
         success: { type: "boolean" },
         intendedActions: {
@@ -314,7 +363,7 @@ gameRouter.post('/action', async (c) => {
           items: { type: "string" }
         },
       },
-      required: ["narrative", "success", "intendedActions", "consequences"]
+      required: ["reasoning", "narrative", "success", "intendedActions", "consequences"]
     };
     
     const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);

@@ -120,6 +120,7 @@ export class GameEngine {
         playerInventory: this.gameState.player.inventory,
         playerStatuses: this.gameState.player.statuses,
         playerHealth: this.gameState.player.health,
+        playerEquippedWeapon: this.gameState.player.equippedItems.weapon,
         action
       });
 
