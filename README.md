@@ -21,12 +21,7 @@ A text-based dungeon crawler game powered by Gemini 2.5 Flash and Cloudflare Wor
    npm install
    ```
 
-5. Generate BAML client:
-   ```
-   npx baml-cli generate
-   ```
-
-6. Run development server:
+5. Run development server:
    ```
    npm run dev
    ```
@@ -59,6 +54,5 @@ The game features:
 
 - Cloudflare Workers (backend)
 - Vite + React (frontend)
-- BAML (structured LLM outputs)
 - Gemini 2.5 Flash (AI dungeon master)
 - Shadcn/UI + Tailwind CSS (UI components)

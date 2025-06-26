@@ -26,9 +26,7 @@ function getOppositeDirection(direction: string): string {
 
 export const gameRouter = new Hono<{ Bindings: Env }>();
 
-// For now, we'll make direct API calls to Gemini
-// Full BAML client migration requires updating schemas and game engine
-// TODO: Migrate to BAML client for better type safety and maintainability
+// Using direct API calls to Gemini for maximum flexibility
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 

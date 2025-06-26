@@ -295,9 +295,12 @@ export class GameEngine {
   }
 
   private applyStateChanges(changes: any) {
-    // Apply health changes
+    // Apply health changes (as relative changes, not absolute values)
     if (changes.health !== undefined) {
-      this.gameState.player.health = Math.max(0, Math.min(changes.health, this.gameState.player.maxHealth));
+      this.gameState.player.health = Math.max(0, Math.min(
+        this.gameState.player.health + changes.health,
+        this.gameState.player.maxHealth
+      ));
     }
 
     // Add new status effects
@@ -795,11 +798,19 @@ export class GameEngine {
       this.processStatusEffect(status);
     }
     
-    // Decrease duration of all status effects
+    // Decrease duration of all status effects (except permanent ones)
     this.gameState.player.statuses = this.gameState.player.statuses
-      .map(status => ({ ...status, duration: status.duration - 1 }))
+      .map(status => {
+        // Don't decrease duration for permanent effects (duration -1)
+        if (status.duration === -1) {
+          return status;
+        }
+        return { ...status, duration: status.duration - 1 };
+      })
       .filter(status => {
-        if (status.duration <= 0) {
+        // Only remove status effects that have expired (duration 0)
+        // Permanent effects (duration -1) will never be removed this way
+        if (status.duration === 0) {
           this.addGameEvent('system', `${status.name} has worn off.`);
           console.log(`Status effect ${status.name} has expired`);
           return false;

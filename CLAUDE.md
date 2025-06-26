@@ -51,18 +51,15 @@ Get Google API key from: https://makersuite.google.com/app/apikey
 - **API Client**: `src/lib/api/gameApi.ts` - Server communication
 - **Types**: `src/types/game.ts` - Comprehensive TypeScript interfaces for game entities
 
-### LLM Integration (BAML)
-- **Client Config**: `baml_src/clients.baml` - Gemini 2.5 Flash configuration
-- **Schemas**: `baml_src/game_schemas.baml` - Structured data definitions
-- **Generated Client**: `baml_client/` - Auto-generated TypeScript client
+### LLM Integration (Gemini API)
+- **Direct API**: Uses Google Gemini 2.5 Flash via direct HTTP calls
 - **Settings**: Temperature 0.8, max 8192 tokens, exponential backoff retry
 
 ## Key Files & Their Purposes
 
 - `src/types/game.ts` - Core game state types (GameState, Player, Room, Item, Monster)
 - `src/lib/game/gameEngine.ts` - Game engine class with state management and action processing
-- `src/worker/game/handlers.ts` - API handlers for game actions using BAML/Gemini
-- `baml_src/game_schemas.baml` - BAML schemas ensuring consistent LLM outputs
+- `src/worker/game/handlers.ts` - API handlers for game actions using Gemini API
 - `src/lib/api/gameApi.ts` - Frontend API client with error handling
 
 ## TypeScript Configuration
@@ -85,7 +82,6 @@ The game uses a unified action system where:
 ## Development Notes
 
 - **No Test Framework**: Currently no tests configured - opportunity for improvement
-- **BAML Regeneration**: Run `npx baml-cli generate` after modifying BAML schemas
 - **Strict TypeScript**: All configs use strict mode with comprehensive linting
 - **Environment**: Uses Cloudflare environment variables for API keys
 - **Deployment**: Single command deployment to Cloudflare Workers via Wrangler

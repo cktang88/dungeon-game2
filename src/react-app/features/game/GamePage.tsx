@@ -231,8 +231,14 @@ export function GamePage({ playerName }: GamePageProps) {
                     onChange={(e) => setInputValue(e.target.value)}
                     onKeyPress={handleKeyPress}
                     disabled={isProcessing || gameEngine?.isGameOver()}
+                    maxLength={1000}
                     autoFocus
                   />
+                  {inputValue.length > 800 && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      {inputValue.length}/1000
+                    </span>
+                  )}
                 </div>
 
                 {isProcessing && (
