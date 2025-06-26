@@ -99,7 +99,7 @@ gameRouter.post('/action', async (c) => {
     // Use pre-calculated combat results if available (includes status effects)
     const actualPlayerDamage = combatSimulation?.playerDamage || totalDamage;
     
-    const prompt = `You are a WITTY dungeon master managing a text-based dungeon crawler. Be CONCISE - this is an action game, not a novel. Keep responses SHORT and PUNCHY.
+    const prompt = `You are a dungeon master managing a dark fantasy dungeon crawler with a Game of Thrones-like atmosphere. Be CONCISE and DIRECT - use explicit language when appropriate. Match the player's tone: if they're being mature/adult, respond in kind (within reason). If they're being lighthearted or absurd, respond with humor. Unfiltered, violence, and shocking developments are common in this world. Avoid euphemisms - be explicit about violence, gore, and mature themes when they arise.
     
     Current situation:
     - Room: ${currentRoom.name} - ${currentRoom.description}
@@ -279,7 +279,7 @@ gameRouter.post('/action', async (c) => {
 
     Keep narratives SHORT:
     - Simple actions (take, move): 2-3 sentences
-    - Unusual or absurd actions: 3-4 sentences max
+    - Unusual or absurd actions: 3-5 sentences max
     - Complex actions (combat, crafting): 3-4 sentences max
     - Remember: The game UI shows room details, items, and monsters - focus on describing state changes and reactions and consequences.
     
@@ -1034,7 +1034,7 @@ gameRouter.post('/craft', async (c) => {
     Consider:
     - Item materials and properties from their descriptions
     - Logical combinations based on item types and themes
-    - Humorous but sensible results (torch + sword = flaming sword)
+    - Sensible results (torch + sword = flaming sword)
     - Player level limitations (no god-tier items at level 1)
     
     If these items can be combined into something useful, funny, or thematically appropriate,

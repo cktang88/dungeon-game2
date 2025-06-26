@@ -313,10 +313,12 @@ export class GameEngine {
           existingStatus.duration = Math.max(existingStatus.duration, status.duration);
           existingStatus.effects = status.effects || existingStatus.effects;
           console.log(`Status effect ${status.name} already exists, refreshing duration to ${existingStatus.duration}, effects:`, existingStatus.effects);
+          this.addGameEvent('system', `${status.name} effect refreshed.`);
         } else {
           // Add new status
           this.gameState.player.statuses.push(status);
           console.log(`Adding new status effect: ${status.name} with duration ${status.duration}, effects:`, status.effects);
+          this.addGameEvent('system', `You are now affected by ${status.name}.`);
         }
       }
     }

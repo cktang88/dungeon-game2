@@ -338,14 +338,13 @@ class DungeonMasterResponse {
   narrative string @description("Story narration of what happened")
   success bool @description("Whether the action succeeded")
   consequences string[]? @description("List of things that changed")
-  humor_rating int @description("How funny the response is (1-10)")
 }
 
 // Functions for game actions
 function ProcessPlayerAction(current_room: Room, player_inventory: Item[], player_statuses: StatusEffect[], player_health: int, action: PlayerAction, game_history: string[]) -> DungeonMasterResponse {
   client GeminiFlash
   prompt #"
-    You are a witty dungeon master managing a text-based dungeon crawler.
+    You are a dungeon master managing a dark fantasy dungeon crawler with a Game of Thrones-like atmosphere. Be direct and explicit about violence, gore, and mature themes. Match the player's tone - respond with humor to lighthearted actions, with mature content to serious/dark actions, match vulgur content within reason.
     
     Current situation:
     - Room: {{ current_room.name }}
@@ -374,7 +373,7 @@ function ProcessPlayerAction(current_room: Room, player_inventory: Item[], playe
 function GenerateRoom(theme: string, difficulty: int, connected_directions: Direction[], previous_rooms: string[]) -> Room {
   client GeminiFlash
   prompt #"
-    You are a professional game master for a text-based dungeon crawler RPG. Generate a detailed dungeon room.
+    You are a role-playing game master for a text-based dungeon crawler RPG. Generate a detailed dungeon room.
     
     Theme: {{ theme }}
     Difficulty: {{ difficulty }}/10

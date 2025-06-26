@@ -161,10 +161,27 @@ export function GamePage({ playerName }: GamePageProps) {
                     <h4 className="font-semibold mb-2 text-lg">Creatures:</h4>
                     <div className="flex gap-2 flex-wrap">
                       {currentRoom.monsters.map((monster) => (
-                        <Badge key={monster.id} variant="destructive">
-                          {monster.name} ({monster.health}/{monster.maxHealth}{" "}
-                          HP)
-                        </Badge>
+                        <Tooltip key={monster.id}>
+                          <TooltipTrigger asChild>
+                            <Badge variant="destructive" className="cursor-help flex items-center gap-1">
+                              {monster.name} ({monster.health}/{monster.maxHealth}{" "}
+                              HP)
+                              <Search className="h-3 w-3" />
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div>
+                              <p className="font-semibold">{monster.name}</p>
+                              {monster.description && <p>{monster.description}</p>}
+                              {monster.appearance && <p className="text-muted-foreground mt-1">{monster.appearance}</p>}
+                              {monster.emotionalState && (
+                                <p className="text-sm mt-1">Mood: {monster.emotionalState.mood}</p>
+                              )}
+                              {monster.occupation && <p className="text-sm">Occupation: {monster.occupation}</p>}
+                              <p className="text-sm mt-1">Health: {monster.health}/{monster.maxHealth}</p>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
                       ))}
                     </div>
                   </div>
