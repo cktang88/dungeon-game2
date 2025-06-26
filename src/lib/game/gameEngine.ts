@@ -123,6 +123,15 @@ export class GameEngine {
         action
       });
 
+      // Debug log the response to check for status effects
+      if (response.intendedActions) {
+        response.intendedActions.forEach((action: any, index: number) => {
+          if (action.stateChanges?.addStatuses) {
+            console.log(`Action ${index} adding statuses:`, JSON.stringify(action.stateChanges.addStatuses, null, 2));
+          }
+        });
+      }
+
       // Add player input to game log first
       this.addGameEvent('player', action.details || action.type);
       
@@ -137,7 +146,8 @@ export class GameEngine {
       // Increment turn
       this.gameState.currentTurn++;
 
-      // Update status effect durations
+      // Update status effect durations (only once per turn)
+      console.log(`Turn ${this.gameState.currentTurn}: Updating status effects`);
       this.updateStatusEffects();
 
       return {
@@ -241,7 +251,21 @@ export class GameEngine {
     // Add new status effects
     if (changes.addStatuses) {
       for (const status of changes.addStatuses) {
-        this.gameState.player.statuses.push(status);
+        // Check if a status with the same name already exists
+        const existingStatus = this.gameState.player.statuses.find(
+          s => s.name.toLowerCase() === status.name.toLowerCase()
+        );
+        
+        if (existingStatus) {
+          // Reset duration and update effects if the same status is reapplied
+          existingStatus.duration = Math.max(existingStatus.duration, status.duration);
+          existingStatus.effects = status.effects || existingStatus.effects;
+          console.log(`Status effect ${status.name} already exists, refreshing duration to ${existingStatus.duration}, effects:`, existingStatus.effects);
+        } else {
+          // Add new status
+          this.gameState.player.statuses.push(status);
+          console.log(`Adding new status effect: ${status.name} with duration ${status.duration}, effects:`, status.effects);
+        }
       }
     }
 
@@ -532,6 +556,9 @@ export class GameEngine {
   }
 
   private updateStatusEffects() {
+    console.log(`--- Updating status effects for turn ${this.gameState.currentTurn} ---`);
+    console.log(`Active status effects: ${this.gameState.player.statuses.map(s => `${s.name} (${s.duration} turns)`).join(', ')}`);
+    
     // Process status effects before decreasing duration
     for (const status of this.gameState.player.statuses) {
       this.processStatusEffect(status);
@@ -543,6 +570,7 @@ export class GameEngine {
       .filter(status => {
         if (status.duration <= 0) {
           this.addGameEvent('system', `${status.name} has worn off.`);
+          console.log(`Status effect ${status.name} has expired`);
           return false;
         }
         return true;
@@ -554,19 +582,34 @@ export class GameEngine {
     const effects = status.effects || {};
     
     // Damage over time
-    if (effects.damagePerTurn) {
+    if (effects.damagePerTurn !== undefined && effects.damagePerTurn !== null) {
+      // Ensure damagePerTurn is a number and not a string
+      const damage = typeof effects.damagePerTurn === 'number' 
+        ? effects.damagePerTurn 
+        : parseInt(String(effects.damagePerTurn), 10) || 0;
+      
+      // Log for debugging
+      console.log(`Processing status effect: ${status.name}, damagePerTurn raw value: ${effects.damagePerTurn} (type: ${typeof effects.damagePerTurn}), parsed damage: ${damage}`);
+      
       this.gameState.player.health = Math.max(0, 
-        this.gameState.player.health - effects.damagePerTurn
+        this.gameState.player.health - damage
       );
-      this.addGameEvent('combat', `${status.name} deals ${effects.damagePerTurn} damage!`);
+      this.addGameEvent('combat', `${status.name} deals ${damage} damage!`);
     }
     
     // Healing over time
-    if (effects.healingPerTurn) {
+    if (effects.healingPerTurn !== undefined && effects.healingPerTurn !== null) {
+      // Ensure healingPerTurn is a number and not a string
+      const healing = typeof effects.healingPerTurn === 'number'
+        ? effects.healingPerTurn
+        : parseInt(String(effects.healingPerTurn), 10) || 0;
+      
+      console.log(`Processing status effect: ${status.name}, healingPerTurn raw value: ${effects.healingPerTurn} (type: ${typeof effects.healingPerTurn}), parsed healing: ${healing}`);
+      
       this.gameState.player.health = Math.min(this.gameState.player.maxHealth,
-        this.gameState.player.health + effects.healingPerTurn
+        this.gameState.player.health + healing
       );
-      this.addGameEvent('action', `${status.name} heals ${effects.healingPerTurn} health.`);
+      this.addGameEvent('action', `${status.name} heals ${healing} health.`);
     }
     
     // Other effects can be added here (speed modifiers, vision reduction, etc.)

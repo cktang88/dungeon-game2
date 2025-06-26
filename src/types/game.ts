@@ -118,5 +118,4 @@ export interface ActionEvaluation {
     details?: any;
   }[];
   consequences: string[];
-  humorRating: number;
 }

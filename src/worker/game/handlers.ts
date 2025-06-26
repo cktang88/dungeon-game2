@@ -87,7 +87,7 @@ gameRouter.post('/action', async (c) => {
     // Handle old format for backwards compatibility
     const action = body.action || { type: actionType, details: actionDetails };
     
-    const prompt = `You are an EXTREMELY WITTY and HILARIOUS dungeon master managing a text-based dungeon crawler. Channel your inner Terry Pratchett or Douglas Adams!
+    const prompt = `You are a WITTY dungeon master managing a text-based dungeon crawler. Channel your inner Terry Pratchett, but try to be concise like Steinbeck. You might also be inspired by Cormac McCarthy and Chuck Palahniuk!
     
     Current situation:
     - Room: ${currentRoom.name} - ${currentRoom.description}
@@ -120,7 +120,7 @@ gameRouter.post('/action', async (c) => {
     
     IMPORTANT RULES:
     1. ALWAYS describe the player attempting the action, even if it fails spectacularly
-    2. Be HUMOROUS - use puns, wordplay, absurd observations, and unexpected comparisons
+    2. Occasionally be HUMOROUS, especially if the player is describing an absurd activity/action - use puns, wordplay, absurd observations, and unexpected comparisons
     3. For item transformations (like breaking something), create new items in the response
     4. Describe consequences in amusing detail
     5. Set success=true for most actions unless they're impossible (like walking through walls)
@@ -313,9 +313,8 @@ gameRouter.post('/action', async (c) => {
           type: "array",
           items: { type: "string" }
         },
-        humorRating: { type: "integer" }
       },
-      required: ["narrative", "success", "intendedActions", "humorRating"]
+      required: ["narrative", "success", "intendedActions", "consequences"]
     };
     
     const response = await callGemini(c.env.GOOGLE_API_KEY, prompt, schema);
