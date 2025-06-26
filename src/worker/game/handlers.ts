@@ -95,7 +95,7 @@ gameRouter.post('/action', async (c) => {
     const weaponDamage = equippedWeapon?.properties?.damage || 0;
     const totalDamage = baseDamage + weaponDamage;
     
-    const prompt = `You are a WITTY dungeon master managing a text-based dungeon crawler. Channel your inner Terry Pratchett, but try to be concise like Steinbeck. You might also be inspired by Cormac McCarthy and Chuck Palahniuk!
+    const prompt = `You are a WITTY dungeon master managing a text-based dungeon crawler. Be CONCISE - this is an action game, not a novel. Keep responses SHORT and PUNCHY.
     
     Current situation:
     - Room: ${currentRoom.name} - ${currentRoom.description}
@@ -116,14 +116,7 @@ gameRouter.post('/action', async (c) => {
     ${craftingMaterials?.length ? `Crafting with: ${craftingMaterials.map(i => i.name).join(', ')}` : ''}
     
     ${newRoomData ? `
-    NEW ROOM ALREADY GENERATED:
-    - Name: ${newRoomData.name}
-    - Description: ${newRoomData.description}
-    - Items: ${newRoomData.items?.map((i: any) => i.name).join(', ') || 'none'}
-    - Monsters: ${newRoomData.monsters?.map((m: any) => m.name).join(', ') || 'none'}
-    - Special features: ${newRoomData.specialFeatures?.join(', ') || 'none'}
-    
-    IMPORTANT: Use this exact room data in your narrative. Do NOT invent different items or monsters!
+    MOVEMENT NOTE: The player is moving to a new room. Just describe the act of moving/transitioning. Do NOT describe the new room's contents.
     ` : ''}
     
     Consider ENVIRONMENTAL STATUS EFFECTS:
@@ -139,10 +132,10 @@ gameRouter.post('/action', async (c) => {
     Status effects should be creative and enhance gameplay!
     
     IMPORTANT RULES:
-    1. ALWAYS describe the player attempting the action, even if it fails spectacularly
-    2. Occasionally be HUMOROUS, especially if the player is describing an absurd activity/action - use puns, wordplay, absurd observations, and unexpected comparisons
-    3. For item transformations (like breaking something), create new items in the response
-    4. Describe consequences in amusing detail
+    1. BE BRIEF! Players want action, not essays
+    2. For compound actions like "take all and go west", describe all actions.
+    3. Occasionally be HUMOROUS, but keep it SHORT - a quick quip, not a paragraph
+    4. For item transformations (like breaking something), create new items in the response
     5. Set success=true for most actions unless they're impossible (like walking through walls)
     6. Even silly actions like "eat torch" should be success=true (player successfully attempts it, even if consequences are bad)
     7. Handle ALL action types intelligently:
@@ -159,10 +152,11 @@ gameRouter.post('/action', async (c) => {
          * Improvised weapons (items used as weapons) still deal damage but may break
        - INTERACTION: Allow creative interactions with items/environment
     8. IMPORTANT: For movement to new rooms:
-       - If newRoomData is provided above, use EXACTLY that room data in your narrative
-       - Describe entering the room and seeing the EXACT items/monsters listed
-       - Do NOT invent different contents - use what's provided
-       - If no newRoomData is provided, just describe the movement action
+       - ONLY describe the act of moving (opening door, stepping through, etc.)
+       - Do NOT describe what's in the new room - the game will show that separately
+       - Keep movement narration brief (1-2 sentences max)
+       - Focus on the transition, not the destination
+       - Example: "You push open the heavy wooden door and step through." (STOP THERE)
     
     CRITICAL: MULTIPLE ACTIONS AND COMBAT RULES:
     - If the player says things like "take all and then go east" or "grab torch then attack goblin", parse this into MULTIPLE separate actions in the intendedActions array
@@ -180,14 +174,15 @@ gameRouter.post('/action', async (c) => {
     Examples:
     - "eat torch" = Single action: eating the torch
     - "take all and go north" = Two actions: 1) take all items (itemsToTake: ["all"]), 2) move north
+      * Narrative: "You quickly gather everything. You head north." (BRIEF!)
     - "grab sword then attack goblin" = Two actions: 1) take sword (itemsToTake: ["sword"]), 2) attack goblin
     - "take all" = itemsToTake: ["all"] (NOT ["Rusty Torch", "Stale Bread"])
     - "grab everything" = itemsToTake: ["all"] (NOT a list of items)
     - "i guess i'll take one bread" = itemsToTake: ["bread"] (ignore quantity modifiers like "one", just take the item)
     - "maybe grab the torch" = itemsToTake: ["torch"] (casual phrasing still means take action)
-    - "go through the door" = moveDirection: choose most logical door direction (or ask the player for clarification)
-    - "enter the north door" = moveDirection: "north"
-    - "use the door" = moveDirection: choose most logical door direction (or ask the player for clarification)
+    - "go through the door" = moveDirection: choose most logical door direction
+    - "enter the north door" = moveDirection: "north", narrative: "You step through the north door."
+    - "run west" = moveDirection: "west", narrative: "You dash westward."
     - "use the torch on the wall" = itemsToUse: ["torch"], narrative describes moving to torch, monsters react
     - "throw the bone at goblin" = itemsToUse: ["bone"], itemsToRemove: ["bone"], goblin becomes alert/aggressive
     
@@ -195,9 +190,7 @@ gameRouter.post('/action', async (c) => {
     - When player uses an item as an improvised weapon (e.g., "smash gnawer with rib bone"):
       * The attack still deals ${totalDamage} damage
       * Describe the impact based on damage vs monster health
-      * Fragile items (bones, sticks, etc.) should break: add itemsToRemove and describe destruction
-      * Create narrative tension between the item's fragility and the damage dealt
-      * Example: "The bone shatters on impact, but still deals crushing damage"
+      * Fragile items (bones, sticks, etc.) might break: add itemsToRemove and describe destruction
     
     USING ITEMS FROM THE ROOM:
     - When the player uses an item that's in the room (not in inventory):
@@ -206,7 +199,7 @@ gameRouter.post('/action', async (c) => {
       * Monsters should react based on their current state and behavior:
         - Alert monsters will notice movement
         - Distracted/sleeping monsters might not notice careful movement
-        - Aggressive monsters might attack during the attempt
+        - Aggressive monsters may attack during the attempt
       * Add the item to itemsToUse array
       * If item is destroyed/consumed/taken, add to itemsToRemove (works for both room and inventory items)
       * Examples:
@@ -236,8 +229,11 @@ gameRouter.post('/action', async (c) => {
     Then use your reasoning to craft the narrative and determine outcomes.
     This ensures consistency and reduces the need for multiple clarifications.
 
-    Vary the length of the narrative based on the complexity of the action(s).
-    For example, a simple movement action might result in just a sentence or two, while than a complex action with multiple targets might warrant a paragraph or more response.
+    Keep narratives SHORT:
+    - Simple actions (take, move): 2-3 sentences
+    - Unusual or absurd actions: 3-4 sentences max
+    - Complex actions (combat, crafting): 3-4 sentences max
+    - Remember: The game UI shows room details, items, and monsters - focus on describing state changes and reactions and consequences.
     
     `;
 
@@ -362,15 +358,7 @@ gameRouter.post('/action', async (c) => {
     // Log the LLM response for debugging
     console.log('LLM Action Response:', JSON.stringify(response, null, 2));
     
-    // If we pre-generated room data, inject it into the response
-    if (newRoomData && response.intendedActions) {
-      response.intendedActions.forEach((action: any) => {
-        if (action.moveDirection && action.stateChanges) {
-          // Add the pre-generated room to state changes
-          action.stateChanges.generatedRoom = newRoomData;
-        }
-      });
-    }
+    // Room data is now handled directly in the game engine
     
     return c.json(response);
   } catch (error) {

@@ -123,6 +123,9 @@ export class GameEngine {
           if (door && !door.locked && !door.leadsTo) {
             // Generate the new room BEFORE processing the action
             newRoomData = await this.generateNewRoom(direction);
+            // Add it to the game state immediately
+            door.leadsTo = newRoomData.id;
+            this.gameState.rooms.set(newRoomData.id, newRoomData);
           }
         }
       }
@@ -362,7 +365,7 @@ export class GameEngine {
 
     // Room should already be generated if needed (done in processAction)
     if (!door.leadsTo) {
-      // Fallback: generate room if somehow not already done
+      console.warn('Room not pre-generated, generating now as fallback');
       const newRoom = await this.generateNewRoom(direction);
       door.leadsTo = newRoom.id;
       this.gameState.rooms.set(newRoom.id, newRoom);
@@ -373,8 +376,8 @@ export class GameEngine {
     const newRoom = this.gameState.rooms.get(door.leadsTo)!;
     newRoom.visited = true;
     
-    // Add room description to game log
-    this.addGameEvent('discovery', `You enter ${newRoom.name}: ${newRoom.description}`);
+    // Simply note that we entered a new room - the UI will show the details
+    this.addGameEvent('discovery', `Entered ${newRoom.name}`);
   }
 
   private async generateNewRoom(fromDirection: string): Promise<Room> {
