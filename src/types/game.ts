@@ -326,6 +326,7 @@ export interface DeadBody {
   originalPossessions?: Item[];
   searchedBy: string[]; // Player IDs who have searched this body
   roomId: string; // Current location of the body
+  originalOccupation?: string; // The NPC's occupation for loot generation
 }
 
 export interface Monster {

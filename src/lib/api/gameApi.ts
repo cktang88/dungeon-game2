@@ -133,7 +133,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to execute action');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to execute action: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -147,7 +149,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to process action');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to process action: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -161,7 +165,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to generate room');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to generate room: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -175,7 +181,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to generate item');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to generate item: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -189,7 +197,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to generate monster');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to generate monster: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -203,7 +213,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to attempt crafting');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to attempt crafting: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -217,7 +229,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to process conversation');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to process conversation: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -231,7 +245,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to update NPC emotional state');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to update NPC emotional state: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -245,7 +261,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to start conversation');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to start conversation: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -259,7 +277,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to evaluate combat behavior');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to evaluate combat behavior: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -273,7 +293,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to process retreat');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to process retreat: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -287,7 +309,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to process surrender');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to process surrender: ${response.statusText} (${response.status})`);
     }
     
     return response.json();
@@ -301,7 +325,9 @@ export class GameAPI {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to search body');
+      const errorText = await response.text();
+      console.error(`API Error (${response.status}):`, errorText);
+      throw new Error(`Failed to search body: ${response.statusText} (${response.status})`);
     }
     
     return response.json();

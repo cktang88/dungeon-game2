@@ -40,9 +40,24 @@ export function GamePage({ playerName }: GamePageProps) {
   };
 
   const handleSubmit = async () => {
-    if (!inputValue.trim() || !gameEngine || isProcessing) return;
+    // Validate input with user feedback
+    if (!inputValue.trim()) {
+      toast.error("Please enter a command");
+      return;
+    }
+    
+    if (!gameEngine) {
+      toast.error("Game is still loading, please wait...");
+      return;
+    }
+    
+    if (isProcessing) {
+      toast.error("Still processing previous command, please wait...");
+      return;
+    }
 
     setIsProcessing(true);
+    const currentInput = inputValue; // Save input in case of error
     const action = parseUserInput(inputValue);
 
     try {
@@ -58,10 +73,17 @@ export function GamePage({ playerName }: GamePageProps) {
         }
       }, 100);
 
+      // Only clear input on successful processing
       setInputValue("");
     } catch (error) {
       console.error("Error processing action:", error);
-      toast.error("Something went wrong!");
+      console.error("Failed input:", currentInput);
+      
+      // Show detailed error message
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Failed to process: "${currentInput}". Error: ${errorMessage}`);
+      
+      // Don't clear input on error - let user retry or edit
     } finally {
       setIsProcessing(false);
     }
@@ -106,10 +128,10 @@ export function GamePage({ playerName }: GamePageProps) {
                           <TooltipTrigger asChild>
                             <Badge
                               variant="outline"
-                              className="cursor-help flex items-center gap-1"
+                              className="cursor-help flex items-center gap-1 px-3 py-1 text-sm"
                             >
                               {door.direction.toUpperCase()}
-                              <Search className="h-3 w-3" />
+                              <Search className="h-4 w-4" />
                             </Badge>
                           </TooltipTrigger>
                           <TooltipContent>
@@ -133,13 +155,13 @@ export function GamePage({ playerName }: GamePageProps) {
                           <TooltipTrigger asChild>
                             <Badge
                               variant="secondary"
-                              className="cursor-help flex items-center gap-1"
+                              className="cursor-help flex items-center gap-1 px-3 py-1 text-sm"
                             >
                               {item.name}{" "}
                               {item.stackable &&
                                 item.quantity > 1 &&
                                 `(${item.quantity})`}
-                              <Search className="h-3 w-3" />
+                              <Search className="h-4 w-4" />
                             </Badge>
                           </TooltipTrigger>
                           <TooltipContent>
@@ -166,7 +188,7 @@ export function GamePage({ playerName }: GamePageProps) {
                             <Badge variant="destructive" className="cursor-help flex items-center gap-1">
                               {monster.name} ({monster.health}/{monster.maxHealth}{" "}
                               HP)
-                              <Search className="h-3 w-3" />
+                              <Search className="h-4 w-4" />
                             </Badge>
                           </TooltipTrigger>
                           <TooltipContent>
@@ -342,7 +364,7 @@ export function GamePage({ playerName }: GamePageProps) {
                               className="mr-2 mb-2 cursor-help flex items-center gap-1"
                             >
                               {status.name} ({status.duration} turns)
-                              <Search className="h-3 w-3" />
+                              <Search className="h-4 w-4" />
                             </Badge>
                           </TooltipTrigger>
                           <TooltipContent>

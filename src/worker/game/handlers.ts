@@ -840,7 +840,16 @@ gameRouter.post('/conversation', async (c) => {
             },
             intensity: { type: "integer" },
             stability: { type: "integer" },
-            triggers: { type: "array", items: { type: "object" } },
+            triggers: { 
+              type: "array", 
+              items: { 
+                type: "object",
+                properties: {
+                  trigger: { type: "string" },
+                  intensity: { type: "number" }
+                }
+              }
+            },
             duration: { type: "integer" },
             lastUpdated: { type: "integer" }
           }
@@ -857,7 +866,17 @@ gameRouter.post('/conversation', async (c) => {
             properties: {
               action_type: { type: "string" },
               description: { type: "string" },
-              parameters: { type: "object" }
+              parameters: { 
+                type: "object",
+                properties: {
+                  item_id: { type: "string" },
+                  quantity: { type: "integer" },
+                  target: { type: "string" },
+                  direction: { type: "string" },
+                  value: { type: "string" },
+                  description: { type: "string" }
+                }
+              }
             }
           },
           description: "Actions the NPC takes (give_item, move, etc)"

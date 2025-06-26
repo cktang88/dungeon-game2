@@ -171,13 +171,13 @@ export class GameEngine {
       // Add player input to game log first
       this.addGameEvent('player', action.details || action.type);
       
-      // Apply consequences based on the response
+      // Add DM narrative response to game log BEFORE applying actions
+      this.addGameEvent('action', response.narrative, { success: response.success });
+      
+      // Apply consequences based on the response AFTER narrative
       if (response.success && response.intendedActions) {
         await this.applyLLMActions(response.intendedActions);
       }
-
-      // Add DM response to game log
-      this.addGameEvent('action', response.narrative, { success: response.success });
 
       // Increment turn
       this.gameState.currentTurn++;
@@ -614,7 +614,9 @@ export class GameEngine {
     const damage = this.calculatePlayerDamage();
     
     monster.health -= damage;
-    this.addGameEvent('combat', `Dealt ${damage} damage to ${monster.name}`);
+    if (damage > 0) {
+      this.addGameEvent('combat', `Dealt ${damage} damage to ${monster.name}`);
+    }
     
     if (monster.health <= 0) {
       // Monster defeated - create persistent body instead of removing
@@ -661,7 +663,9 @@ export class GameEngine {
         // Monster counterattacks
         const actualDamageTaken = this.calculateDamageTaken(monster.damage);
         this.gameState.player.health -= actualDamageTaken;
-        this.addGameEvent('combat', `${monster.name} deals ${actualDamageTaken} damage to you!`);
+        if (actualDamageTaken > 0) {
+          this.addGameEvent('combat', `${monster.name} deals ${actualDamageTaken} damage to you!`);
+        }
         
         if (this.gameState.player.health <= 0) {
           this.gameState.gameOver = true;
@@ -836,7 +840,9 @@ export class GameEngine {
       this.gameState.player.health = Math.max(0, 
         this.gameState.player.health - damage
       );
-      this.addGameEvent('combat', `${status.name} deals ${damage} damage!`);
+      if (damage > 0) {
+        this.addGameEvent('combat', `${status.name} deals ${damage} damage!`);
+      }
     }
     
     // Healing over time
@@ -851,7 +857,9 @@ export class GameEngine {
       this.gameState.player.health = Math.min(this.gameState.player.maxHealth,
         this.gameState.player.health + healing
       );
-      this.addGameEvent('action', `${status.name} heals ${healing} health.`);
+      if (healing > 0) {
+        this.addGameEvent('action', `${status.name} heals ${healing} health.`);
+      }
     }
     
     // Other effects can be added here (speed modifiers, vision reduction, etc.)
@@ -968,7 +976,8 @@ export class GameEngine {
       originalLoot: monster.loot || [],
       originalPossessions: [...(monster.possessions || []), ...generatedItems],
       searchedBy: [],
-      roomId: currentRoom.id
+      roomId: currentRoom.id,
+      originalOccupation: monster.occupation || 'unknown'
     };
 
     // Initialize dead bodies array if it doesn't exist
@@ -1406,19 +1415,9 @@ export class GameEngine {
     }
 
     try {
-      // Find the original NPC to get occupation info
-      let originalOccupation = 'unknown';
-      const deadNPC = currentRoom.monsters.find(m => m.id === body.originalNPCId);
-      if (deadNPC && deadNPC.occupation) {
-        originalOccupation = deadNPC.occupation;
-      }
-
       // Use API to handle body search (will generate items if needed)
       const searchResult = await this.api.searchBody({
-        body: {
-          ...body,
-          originalOccupation
-        },
+        body: body,
         searcherId: this.gameState.player.name,
         roomContext: `${currentRoom.name}: ${currentRoom.description}`
       });
@@ -1427,9 +1426,12 @@ export class GameEngine {
         // Mark body as searched
         body.searchedBy.push(this.gameState.player.name);
         
-        // Add found items to room
+        // Add found items directly to player inventory
         if (searchResult.itemsFound && searchResult.itemsFound.length > 0) {
-          currentRoom.items.push(...searchResult.itemsFound);
+          for (const item of searchResult.itemsFound) {
+            this.gameState.player.inventory.push(item);
+            this.addGameEvent('action', `Found ${item.name} on the body`);
+          }
         }
 
         // Create emotional event for witnesses if they react
