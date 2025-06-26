@@ -1,0 +1,321 @@
+import { useState, useEffect, useRef, KeyboardEvent } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { Heart, Sword, Shield, Package } from 'lucide-react';
+import { GameEngine } from '@/lib/game/gameEngine';
+import { PlayerAction, GameState, Item } from '@/types/game';
+import { toast } from 'sonner';
+
+interface GamePageProps {
+  playerName: string;
+}
+
+export function GamePage({ playerName }: GamePageProps) {
+  const [gameEngine, setGameEngine] = useState<GameEngine | null>(null);
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [inputValue, setInputValue] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Initialize game engine
+    const engine = new GameEngine(playerName);
+    setGameEngine(engine);
+    setGameState(engine.getGameState());
+  }, [playerName]);
+
+  const parseUserInput = (input: string): PlayerAction => {
+    // Send everything as a custom action for the LLM to interpret
+    return { type: 'custom', details: input };
+  };
+
+  const handleSubmit = async () => {
+    if (!inputValue.trim() || !gameEngine || isProcessing) return;
+    
+    setIsProcessing(true);
+    const action = parseUserInput(inputValue);
+    
+    try {
+      const response = await gameEngine.processAction(action);
+      setGameState(response.updatedGameState);
+      
+      // Don't show toast for action failures - the game narrative handles this
+      
+      // Scroll to bottom of terminal
+      setTimeout(() => {
+        if (scrollAreaRef.current) {
+          scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+        }
+      }, 100);
+      
+      setInputValue('');
+    } catch (error) {
+      console.error('Error processing action:', error);
+      toast.error('Something went wrong!');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleKeyPress = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  if (!gameState) {
+    return <div className="container mx-auto py-8">Loading game...</div>;
+  }
+
+  const currentRoom = gameState.rooms.get(gameState.player.currentRoomId);
+  const recentEvents = gameState.gameLog.slice(-50);
+
+  return (
+    <div className="container mx-auto py-4 max-w-6xl">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Main Game Area */}
+        <div className="lg:col-span-2 space-y-4">
+          {/* Current Room */}
+          <Card>
+            <CardHeader>
+              <CardTitle>{currentRoom?.name || 'Unknown Location'}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-muted-foreground mb-4 text-lg leading-relaxed">
+                {currentRoom?.description}
+              </p>
+              
+              {currentRoom?.doors && currentRoom.doors.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="font-semibold mb-2 text-lg">Exits:</h4>
+                  <div className="flex gap-2 flex-wrap">
+                    {currentRoom.doors.map(door => (
+                      <Badge key={door.id} variant="outline">
+                        {door.direction} - {door.description}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {currentRoom?.items && currentRoom.items.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="font-semibold mb-2 text-lg">Items:</h4>
+                  <div className="flex gap-2 flex-wrap">
+                    {currentRoom.items.map(item => (
+                      <Badge key={item.id} variant="secondary">
+                        {item.name} {item.stackable && item.quantity > 1 && `(${item.quantity})`}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {currentRoom?.monsters && currentRoom.monsters.length > 0 && (
+                <div>
+                  <h4 className="font-semibold mb-2 text-lg">Creatures:</h4>
+                  <div className="flex gap-2 flex-wrap">
+                    {currentRoom.monsters.map(monster => (
+                      <Badge key={monster.id} variant="destructive">
+                        {monster.name} ({monster.health}/{monster.maxHealth} HP)
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Terminal Interface - Combined Log and Input */}
+          <div className="terminal-container">
+            <div className="terminal-log" ref={scrollAreaRef}>
+              {recentEvents.map(event => (
+                <div key={event.id} className="mb-2">
+                  {event.type === 'player' ? (
+                    <div className="text-green-600 dark:text-green-400">
+                      <span className="select-none font-bold">&gt; </span>
+                      <span className="font-semibold">{event.message}</span>
+                    </div>
+                  ) : (
+                    <div className={`pl-6 ${
+                      event.type === 'combat' ? 'text-red-600 dark:text-red-400' :
+                      event.type === 'discovery' ? 'text-yellow-600 dark:text-yellow-400' :
+                      event.type === 'system' ? 'text-blue-600 dark:text-blue-400' :
+                      'text-foreground'
+                    }`}>
+                      {event.message}
+                    </div>
+                  )}
+                </div>
+              ))}
+              
+              {/* Current Input Line */}
+              <div className="terminal-prompt mt-4">
+                <input
+                  type="text"
+                  className={`terminal-input ${!isProcessing && !gameEngine?.isGameOver() ? 'blinking-caret' : ''}`}
+                  placeholder="What do you do?"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  disabled={isProcessing || gameEngine?.isGameOver()}
+                  autoFocus
+                />
+              </div>
+              
+              {isProcessing && (
+                <div className="pl-6 mt-2 text-muted-foreground italic">
+                  The dungeon master is thinking...
+                </div>
+              )}
+              
+              {gameEngine?.isGameOver() && (
+                <div className="mt-6 text-center">
+                  <p className="text-xl font-bold ${
+                    gameEngine.isVictory() ? 'text-yellow-500' : 'text-red-500'
+                  }">
+                    {gameEngine.isVictory() ? '🎉 Victory! 🎉' : '💀 Game Over 💀'}
+                  </p>
+                  <Button 
+                    className="mt-4" 
+                    onClick={() => window.location.reload()}
+                  >
+                    Start New Game
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Side Panel */}
+        <div className="space-y-4">
+          {/* Player Stats */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Heart className="h-5 w-5" />
+                {gameState.player.name}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-lg">
+                  <span>Health</span>
+                  <span className="font-semibold">
+                    {gameState.player.health}/{gameState.player.maxHealth}
+                  </span>
+                </div>
+                <div className="w-full bg-secondary rounded-full h-2.5">
+                  <div 
+                    className="bg-red-500 h-2.5 rounded-full transition-all"
+                    style={{ 
+                      width: `${(gameState.player.health / gameState.player.maxHealth) * 100}%` 
+                    }}
+                  />
+                </div>
+                
+                {gameState.player.statuses.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="font-semibold mb-2">Active Effects:</h4>
+                    {gameState.player.statuses.map(status => (
+                      <Badge 
+                        key={status.id} 
+                        variant={status.type === 'buff' ? 'default' : 'destructive'}
+                        className="mr-2 mb-2"
+                      >
+                        {status.name} ({status.duration} turns)
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Inventory */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Package className="h-5 w-5" />
+                Inventory
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Tabs defaultValue="all" className="w-full">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="all">All</TabsTrigger>
+                  <TabsTrigger value="equipment">Equipment</TabsTrigger>
+                  <TabsTrigger value="consumables">Consumables</TabsTrigger>
+                </TabsList>
+                <TabsContent value="all" className="mt-4">
+                  <ScrollArea className="h-[200px]">
+                    {gameState.player.inventory.length === 0 ? (
+                      <p className="text-muted-foreground text-base">Empty</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {gameState.player.inventory.map(item => (
+                          <InventoryItem key={item.id} item={item} />
+                        ))}
+                      </div>
+                    )}
+                  </ScrollArea>
+                </TabsContent>
+                <TabsContent value="equipment" className="mt-4">
+                  <ScrollArea className="h-[200px]">
+                    <div className="space-y-2">
+                      {gameState.player.inventory
+                        .filter(item => item.type === 'weapon' || item.type === 'armor')
+                        .map(item => (
+                          <InventoryItem key={item.id} item={item} />
+                        ))}
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+                <TabsContent value="consumables" className="mt-4">
+                  <ScrollArea className="h-[200px]">
+                    <div className="space-y-2">
+                      {gameState.player.inventory
+                        .filter(item => item.type === 'consumable')
+                        .map(item => (
+                          <InventoryItem key={item.id} item={item} />
+                        ))}
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InventoryItem({ item }: { item: Item }) {
+  const getIcon = () => {
+    switch (item.type) {
+      case 'weapon': return <Sword className="h-4 w-4" />;
+      case 'armor': return <Shield className="h-4 w-4" />;
+      case 'consumable': return <Heart className="h-4 w-4" />;
+      default: return <Package className="h-4 w-4" />;
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 p-2 rounded hover:bg-accent">
+      {getIcon()}
+      <div className="flex-1">
+        <div className="text-base font-medium">
+          {item.name} {item.stackable && item.quantity > 1 && `(${item.quantity})`}
+        </div>
+        <div className="text-sm text-muted-foreground">{item.description}</div>
+      </div>
+    </div>
+  );
+}
