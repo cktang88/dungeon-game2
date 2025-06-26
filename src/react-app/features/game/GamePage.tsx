@@ -260,6 +260,13 @@ export function GamePage({ playerName }: GamePageProps) {
               <CardContent>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center text-lg">
+                    <span>Level</span>
+                    <span className="font-semibold text-yellow-600">
+                      {gameState.player.level || 1}
+                    </span>
+                  </div>
+                  
+                  <div className="flex justify-between items-center text-lg">
                     <span>Health</span>
                     <span className="font-semibold">
                       {gameState.player.health}/{gameState.player.maxHealth}
@@ -272,6 +279,25 @@ export function GamePage({ playerName }: GamePageProps) {
                         width: `${
                           (gameState.player.health /
                             gameState.player.maxHealth) *
+                          100
+                        }%`,
+                      }}
+                    />
+                  </div>
+                  
+                  <div className="flex justify-between items-center text-sm">
+                    <span>Experience</span>
+                    <span className="font-semibold">
+                      {gameState.player.experience || 0}/{gameState.player.experienceToNext || 100}
+                    </span>
+                  </div>
+                  <div className="w-full bg-secondary rounded-full h-2">
+                    <div
+                      className="bg-blue-500 h-2 rounded-full transition-all"
+                      style={{
+                        width: `${
+                          ((gameState.player.experience || 0) /
+                            (gameState.player.experienceToNext || 100)) *
                           100
                         }%`,
                       }}

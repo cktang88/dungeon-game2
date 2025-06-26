@@ -119,7 +119,9 @@ gameRouter.post('/action', async (c) => {
     MOVEMENT NOTE: The player is moving to a new room. Just describe the act of moving/transitioning. Do NOT describe the new room's contents.
     ` : ''}
     
-    Consider ENVIRONMENTAL STATUS EFFECTS:
+    APPLY STATUS EFFECTS FREQUENTLY - they make the game more engaging!
+    
+    ENVIRONMENTAL STATUS EFFECTS:
     - Walking through water → "Wet" (vulnerable to electricity, slower movement)
     - Fighting monsters → "Tired" (reduced damage after many actions)
     - Not drinking for many turns → "Thirsty" (reduced max health)
@@ -127,9 +129,28 @@ gameRouter.post('/action', async (c) => {
     - Dark rooms → "Blinded" (miss attacks more often)
     - Cold environments → "Frozen" (slower actions)
     - Hot environments → "Burning" (damage over time)
+    - Cramped spaces → "Claustrophobic" (reduced accuracy)
+    - High places → "Dizzy" (movement penalties)
+    - Fungal areas → "Spore Infection" (hallucinations, damage over time)
     
-    Add/remove status effects based on the player's actions and environment.
-    Status effects should be creative and enhance gameplay!
+    PSYCHOLOGICAL STATUS EFFECTS (apply these often for narrative depth!):
+    - Facing powerful enemies → "Intimidated" (reduced damage)
+    - Successful combat → "Confident" (bonus damage)
+    - Witnessing death/horror → "Traumatized" (reduced accuracy)
+    - Finding treasure → "Elated" (faster movement)
+    - Being alone too long → "Paranoid" (see threats that aren't there)
+    - Eating bad food → "Nauseous" (reduced health regen)
+    - Discovering secrets → "Curious" (bonus to finding hidden items)
+    - Taking risky actions → "Reckless" (more damage dealt and taken)
+    - Failing repeatedly → "Demoralized" (all actions less effective)
+    - Using magic items → "Mystified" (unpredictable effects)
+    
+    STATUS EFFECT GUIDELINES:
+    - Apply 1-2 status effects per action when appropriate
+    - Stack similar effects (Tired → Exhausted → Collapsed)
+    - Use 2-5 turn durations for most effects
+    - Environmental effects trigger automatically
+    - Psychological effects based on player actions/situations
     
     IMPORTANT RULES:
     1. BE BRIEF! Players want action, not essays
@@ -146,7 +167,10 @@ gameRouter.post('/action', async (c) => {
          * DO NOT generate room details in the narrative - just describe the movement action
          * The room will be generated separately to ensure consistency
        - CRAFTING: Combine items creatively to make new items
-       - COMBAT: Player attacks ALWAYS deal ${totalDamage} damage. Describe the impact accurately!
+       - COMBAT: Player attacks ALWAYS deal ${totalDamage} damage. Use targetsToAttack field only!
+         * Do NOT set stateChanges.health for combat - the game handles damage automatically
+         * Do NOT use stateChanges.health for healing items - the game handles consumables automatically
+         * Only use stateChanges.health for environmental damage or poison/disease effects
          * If damage >= monster's health: Monster is defeated/killed
          * If damage < monster's health: Monster takes damage but survives
          * Improvised weapons (items used as weapons) still deal damage but may break
@@ -272,7 +296,10 @@ gameRouter.post('/action', async (c) => {
               stateChanges: {
                 type: "object",
                 properties: {
-                  health: { type: "integer" },
+                  health: { 
+                    type: "integer",
+                    description: "ONLY for environmental damage or status effects. Do NOT use for healing items or combat - the game handles those automatically!"
+                  },
                   addStatuses: {
                     type: "array",
                     items: {
@@ -394,8 +421,8 @@ gameRouter.post('/generate/room', async (c) => {
     Include:
     1. A unique initial impression (sights/smells/sounds/sensations when entering)
     2. Detailed atmospheric description of the room and contents
-    3. 0-4 items (consider containers, hidden items, items in use by monsters)
-    4. 0-4 monsters (weaker enemies often appear in groups, monsters should be doing something)
+    3. 0-4 items (PRIORITIZE potions, food, consumables! Also weapons, tools, containers)
+    4. 0-4 creatures (mix of hostile monsters AND friendly NPCs like shopkeepers, merchants, witches, travelers)
     5. Special features, puzzles, mysterious signs, or interactive elements
     6. EXACTLY ${allRequiredDoors.length} exits in the directions: ${allRequiredDoors.join(', ')}
     
@@ -406,11 +433,20 @@ gameRouter.post('/generate/room', async (c) => {
     - Specific details on walls, floors, ceilings (carvings, stains, damage)
     - Ongoing events (rituals, arguments, experiments, meals)
     
-    Monsters should have:
+    Creatures (Monsters AND NPCs) should have:
     - Current emotional state (calm, agitated, fearful, etc)
     - What they're doing right now (not just standing around)
     - Physical condition (healthy, injured, tired, etc)
     - Whether they've noticed the player (usually NO on first encounter)
+    
+    NPCs can be:
+    - Shopkeepers with wares to sell
+    - Traveling merchants with exotic goods
+    - Witches brewing potions
+    - Lost travelers needing rescue
+    - Hermits with wisdom/information
+    - Guards protecting areas
+    - Use "friendly" or "neutral" behavior for NPCs instead of "aggressive"
     
     Make it atmospheric, engaging, and full of potential for emergent gameplay!`;
 
@@ -522,6 +558,9 @@ gameRouter.post('/generate/item', async (c) => {
     - Thematically consistent with the dungeon setting
     - Memorable and distinctive
     
+    PRIORITIZE CONSUMABLES AND POTIONS - they're rare in this dungeon!
+    Include: healing potions, antidotes, buff potions, food items, magical consumables
+    
     Tips for balanced items:
     - Align power with rarity level
     - Rarer items should have more unique effects or properties
@@ -539,11 +578,16 @@ gameRouter.post('/generate/item', async (c) => {
     - Consider multi-use potential (weapon that's also a tool, armor with pockets)
     
     Examples by rarity:
-    - Common: "Torch" (provides light, can be weapon, burns things)
+    CONSUMABLES:
+    - Common: "Healing Potion" (restores 25 health), "Stale Bread" (restores 5 health)
+    - Uncommon: "Antidote Vial" (cures poison), "Strength Elixir" (+3 damage for 5 turns)
+    - Rare: "Potion of Regeneration" (heals 5 HP per turn for 10 turns), "Courage Draught" (immunity to fear effects)
+    - Epic: "Elixir of Life" (full heal + temporary max health boost), "Philosopher's Stone" (transmutes materials)
+    
+    WEAPONS & TOOLS:
+    - Common: "Rusty Dagger", "Torch" (provides light, can be weapon)
     - Uncommon: "Ever-burning Torch" (never goes out, different colored flame)
     - Rare: "Torch of Revealing" (shows hidden doors, dispels illusions)
-    - Epic: "Sunfire Torch" (damages undead, heals allies, daylight spell)
-    - Legendary: "The First Flame" (ancient artifact, multiple powers, quest significance)
     
     Make the item memorable through specific details, not just stats!`;
 

@@ -89,6 +89,9 @@ export class GameEngine {
       name,
       health: 100,
       maxHealth: 100,
+      level: 1,
+      experience: 0,
+      experienceToNext: 100,
       inventory: [],
       equippedItems: {},
       statuses: [],
@@ -374,7 +377,13 @@ export class GameEngine {
     // Move player
     this.gameState.player.currentRoomId = door.leadsTo;
     const newRoom = this.gameState.rooms.get(door.leadsTo)!;
-    newRoom.visited = true;
+    
+    // Award XP for discovering new rooms
+    if (!newRoom.visited) {
+      newRoom.visited = true;
+      const explorationXP = 15 + (this.gameState.player.level * 3);
+      this.gainExperience(explorationXP, 'Discovered ' + newRoom.name);
+    }
     
     // Simply note that we entered a new room - the UI will show the details
     this.addGameEvent('discovery', `Entered ${newRoom.name}`);
@@ -399,7 +408,7 @@ export class GameEngine {
     try {
       const generatedRoom = await this.api.generateRoom({
         theme: 'dark fantasy dungeon',
-        difficulty: Math.min(this.gameState.currentTurn / 10 + 1, 10),
+        difficulty: Math.min(this.gameState.player.level + 1, 10),
         connectedDirections: [oppositeDirection],
         additionalDoors
       });
@@ -586,6 +595,10 @@ export class GameEngine {
         currentRoom.items.push(...monster.loot);
         this.addGameEvent('discovery', `${monster.name} dropped some items!`);
       }
+      
+      // Award experience for killing monsters
+      const xpGain = Math.max(5, monster.maxHealth * 2); // 2 XP per max HP, minimum 5
+      this.gainExperience(xpGain, 'Defeated ' + monster.name);
     } else {
       // Monster counterattacks
       this.gameState.player.health -= monster.damage;
@@ -622,7 +635,7 @@ export class GameEngine {
     try {
       const craftedItem = await this.api.attemptCrafting({
         items,
-        playerLevel: 1
+        playerLevel: this.gameState.player.level
       });
       
       if (craftedItem) {
@@ -637,6 +650,10 @@ export class GameEngine {
         // Add crafted item
         this.gameState.player.inventory.push(craftedItem);
         this.addGameEvent('action', `Successfully crafted ${craftedItem.name}!`);
+        
+        // Award XP for successful crafting
+        const craftingXP = 10 + (this.gameState.player.level * 2);
+        this.gainExperience(craftingXP, 'Successful crafting');
       } else {
         this.addGameEvent('action', 'These items cannot be combined.');
       }
@@ -744,5 +761,34 @@ export class GameEngine {
 
   isVictory(): boolean {
     return this.gameState.victory;
+  }
+
+  private gainExperience(amount: number, reason: string) {
+    this.gameState.player.experience += amount;
+    this.addGameEvent('system', `+${amount} XP (${reason})`);
+    
+    // Check for level up
+    if (this.gameState.player.experience >= this.gameState.player.experienceToNext) {
+      this.levelUp();
+    }
+  }
+
+  private levelUp() {
+    const oldLevel = this.gameState.player.level;
+    this.gameState.player.level++;
+    
+    // Calculate new XP requirement (exponential growth)
+    const baseXP = 100;
+    this.gameState.player.experienceToNext = Math.floor(baseXP * Math.pow(1.5, this.gameState.player.level - 1));
+    
+    // Level up benefits
+    const healthGain = 20 + (this.gameState.player.level * 5);
+    this.gameState.player.maxHealth += healthGain;
+    this.gameState.player.health = this.gameState.player.maxHealth; // Full heal on level up
+    
+    this.addGameEvent('levelup', `LEVEL UP! You are now level ${this.gameState.player.level}!`);
+    this.addGameEvent('levelup', `+${healthGain} max health! Fully healed!`);
+    
+    console.log(`Player leveled up from ${oldLevel} to ${this.gameState.player.level}`);
   }
 }

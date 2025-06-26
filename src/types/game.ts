@@ -59,6 +59,9 @@ export interface Player {
   name: string;
   health: number;
   maxHealth: number;
+  level: number;
+  experience: number;
+  experienceToNext: number;
   inventory: Item[];
   equippedItems: {
     weapon?: Item;
@@ -73,7 +76,7 @@ export interface Player {
 export interface GameEvent {
   id: string;
   timestamp: number;
-  type: 'action' | 'combat' | 'discovery' | 'system';
+  type: 'action' | 'combat' | 'discovery' | 'system' | 'levelup';
   message: string;
   details?: Record<string, any>;
 }
